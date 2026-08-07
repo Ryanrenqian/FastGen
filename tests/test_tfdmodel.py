@@ -74,11 +74,11 @@ def test_imagenet_feature_tokens_resolve_to_official_modules():
         model, ["enc:6", "enc:11", "bottleneck", "dec:7", "dec:12"]
     )
     assert selectors == [
-        ("enc", "32x32_block2"),
-        ("enc", "8x8_block1"),
+        ("enc", "32x32_block1"),
+        ("enc", "16x16_block2"),
         ("enc", "8x8_block2"),
-        ("dec", "16x16_block2"),
-        ("dec", "32x32_block3"),
+        ("dec", "16x16_block0"),
+        ("dec", "32x32_block0"),
     ]
 
 

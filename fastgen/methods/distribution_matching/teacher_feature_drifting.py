@@ -191,11 +191,13 @@ class TFDModel(FastGenModel):
     ) -> list[torch.Tensor]:
         noisy = self.teacher.noise_scheduler.forward_process(samples, torch.randn_like(samples), sigmas)
         context = torch.enable_grad() if keep_input_grad else torch.no_grad()
-        with context:
+        # The authors call the teacher with force_fp32=True even though the
+        # generator recipe uses FP16. Preserve that behavior here.
+        with context, torch.autocast(device_type=samples.device.type, enabled=False):
             features = self.teacher(
-                noisy,
-                sigmas,
-                condition=condition,
+                noisy.float(),
+                sigmas.float(),
+                condition=condition.float() if isinstance(condition, torch.Tensor) else condition,
                 return_features_early=True,
                 feature_selectors=self.feature_selectors,
             )
