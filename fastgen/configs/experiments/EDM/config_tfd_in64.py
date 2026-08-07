@@ -33,6 +33,7 @@ def create_config():
     config.model.net_optimizer.lr = 2e-6
     config.model.net_optimizer.betas = (0.9, 0.999)
     config.model.net_optimizer.weight_decay = 0.01
+    config.model.net_scheduler.f_start = [0.0]
     # The authors' EDM flag is named use_fp16, but its implementation uses
     # torch.bfloat16 and Accelerator(mixed_precision="no") without scaling.
     config.model.precision_amp = "bfloat16"
@@ -50,6 +51,7 @@ def create_config():
     # FastGen optimizes range(1, max_iter), hence +1 for 200,000 updates.
     config.trainer.max_iter = 200001
     config.trainer.logging_iter = 100
+    config.trainer.save_ckpt_iter = 500
     config.trainer.callbacks.grad_clip.grad_norm = 10.0
     config.log_config.group = "edm_imagenet64_tfd"
     return config

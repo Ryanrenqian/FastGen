@@ -103,3 +103,5 @@ def test_imagenet_recipe_uses_official_bfloat16_semantics_and_update_count():
     assert config.model.grad_scaler_enabled is False
     assert config.model.use_ema is False
     assert config.trainer.max_iter == 200001
+    assert config.model.net_scheduler.f_start == [0.0]
+    assert config.trainer.save_ckpt_iter == 500
