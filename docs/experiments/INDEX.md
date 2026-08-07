@@ -16,3 +16,4 @@ Track all hypotheses in one place.
 - Keep `Status`, `Commit Range`, and `Result Summary` current.
 - `Record` must point to the detailed hypothesis markdown file.
 - If a hypothesis is split, create new IDs; do not overwrite history.
+| HYP-20260807-08 | TFD ImageNet-64 official-recipe reproduction | implementation validation | exploratory | `docs/experiments/HYP-20260807-08.md` |

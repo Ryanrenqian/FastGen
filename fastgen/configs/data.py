@@ -4,6 +4,7 @@
 import os
 
 from fastgen.datasets.class_cond_dataloader import ImageLoader
+from fastgen.datasets.tfd_class_cond_dataloader import TFDImageNetLoader
 from fastgen.datasets.wds_dataloaders import (
     WDSLoader,
     ImageWDSLoader,
@@ -104,6 +105,16 @@ ImageNet64_Loader_Config = L(ImageLoader)(
     batch_size=32,
     shuffle=True,
     sampler_start_idx=None,
+)
+
+TFD_ImageNet64_Loader_Config = L(TFDImageNetLoader)(
+    dataset_path=f"{DATA_ROOT_DIR}/imagenet-64/imagenet-64x64.zip",
+    s3_path=f"{S3_DATA_ROOT_DIR}/imagenet-64/imagenet-64x64.zip",
+    batch_size=10,
+    positives_per_condition=4,
+    anchors_per_condition=4,
+    seed=10,
+    use_labels=True,
 )
 
 ImageNet256_Loader_Config = L(ImageLoader)(

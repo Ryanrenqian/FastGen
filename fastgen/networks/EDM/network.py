@@ -497,6 +497,7 @@ class SongUNet(torch.nn.Module):
         return_features_early=False,
         feature_indices=None,
         return_logvar=False,
+        feature_selectors=None,
     ):
         # Mapping.
         emb_timestep = self.map_noise(noise_labels)
@@ -525,6 +526,7 @@ class SongUNet(torch.nn.Module):
         skips = []
         aux = x
         idx, features = 0, []
+        selected_features = {}
         for name, block in self.enc.items():
             if "aux_down" in name:
                 aux = block(aux)
@@ -535,13 +537,17 @@ class SongUNet(torch.nn.Module):
             else:
                 x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
                 skips.append(x)
+                if feature_selectors is not None and ("enc", name) in feature_selectors:
+                    selected_features[("enc", name)] = x
                 if name.endswith(f"block{self.num_blocks - 1}"):
                     if idx in feature_indices:
                         features.append(x)
                     idx += 1
 
         # If all requested features are in the encoder, we can exit early.
-        if return_features_early and len(features) == len(feature_indices):
+        if feature_selectors is not None and return_features_early and len(selected_features) == len(feature_selectors):
+            return [selected_features[selector] for selector in feature_selectors]
+        if feature_selectors is None and return_features_early and len(features) == len(feature_indices):
             return features
 
         # Decoder.
@@ -559,13 +565,20 @@ class SongUNet(torch.nn.Module):
                 if x.shape[1] != block.in_channels:
                     x = torch.cat([x, skips.pop()], dim=1)
                 x = block(x, emb)
+                if feature_selectors is not None and ("dec", name) in feature_selectors:
+                    selected_features[("dec", name)] = x
                 if name.endswith(f"block{self.num_blocks}"):
                     if idx in feature_indices:
                         features.append(x)
                     idx += 1
-                    if return_features_early and len(features) == len(feature_indices):
+                    if feature_selectors is None and return_features_early and len(features) == len(feature_indices):
                         return features
+                if feature_selectors is not None and return_features_early and len(selected_features) == len(feature_selectors):
+                    return [selected_features[selector] for selector in feature_selectors]
 
+        if feature_selectors is not None and return_features_early:
+            missing = [selector for selector in feature_selectors if selector not in selected_features]
+            raise ValueError(f"Requested EDM feature selectors are not available: {missing}")
         if return_features_early:
             raise ValueError(
                 f"Requested feature indices {sorted(feature_indices)} are not available; "
@@ -700,6 +713,7 @@ class DhariwalUNet(torch.nn.Module):
         return_features_early=False,
         feature_indices=None,
         return_logvar=False,
+        feature_selectors=None,
     ):
         # Mapping.
         emb_timestep = self.map_noise(noise_labels)
@@ -726,8 +740,11 @@ class DhariwalUNet(torch.nn.Module):
         # Encoder.
         skips = []
         idx, features = 0, []
+        selected_features = {}
         for name, block in self.enc.items():
             x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
+            if feature_selectors is not None and ("enc", name) in feature_selectors:
+                selected_features[("enc", name)] = x
             if name.endswith(f"block{self.num_blocks - 1}"):
                 if idx in feature_indices:
                     features.append(x)
@@ -735,7 +752,9 @@ class DhariwalUNet(torch.nn.Module):
             skips.append(x)
 
         # If all requested features are in the encoder, we can exit early.
-        if return_features_early and len(features) == len(feature_indices):
+        if feature_selectors is not None and return_features_early and len(selected_features) == len(feature_selectors):
+            return [selected_features[selector] for selector in feature_selectors]
+        if feature_selectors is None and return_features_early and len(features) == len(feature_indices):
             return features
 
         # Decoder.
@@ -743,12 +762,19 @@ class DhariwalUNet(torch.nn.Module):
             if x.shape[1] != block.in_channels:
                 x = torch.cat([x, skips.pop()], dim=1)
             x = block(x, emb)
+            if feature_selectors is not None and ("dec", name) in feature_selectors:
+                selected_features[("dec", name)] = x
             if name.endswith(f"block{self.num_blocks}"):
                 if idx in feature_indices:
                     features.append(x)
                 idx += 1
-                if return_features_early and len(features) == len(feature_indices):
+                if feature_selectors is None and return_features_early and len(features) == len(feature_indices):
                     return features
+            if feature_selectors is not None and return_features_early and len(selected_features) == len(feature_selectors):
+                return [selected_features[selector] for selector in feature_selectors]
+        if feature_selectors is not None and return_features_early:
+            missing = [selector for selector in feature_selectors if selector not in selected_features]
+            raise ValueError(f"Requested EDM feature selectors are not available: {missing}")
         if return_features_early:
             raise ValueError(
                 f"Requested feature indices {sorted(feature_indices)} are not available; "
@@ -909,13 +935,14 @@ class EDMPrecond(FastGenNetwork):
         r: Optional[torch.Tensor] = None,
         return_features_early: bool = False,
         feature_indices: Optional[Set[int]] = None,
+        feature_selectors: Optional[List[Tuple[str, str]]] = None,
         return_logvar: bool = False,
         fwd_pred_type: Optional[str] = None,
         **fwd_kwargs,
     ) -> Union[torch.Tensor, List[torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
         if feature_indices is None:
             feature_indices = {}
-        if return_features_early and len(feature_indices) == 0:
+        if return_features_early and len(feature_indices) == 0 and not feature_selectors:
             # Exit immediately if user requested this.
             return []
         if fwd_pred_type is None:
@@ -963,6 +990,7 @@ class EDMPrecond(FastGenNetwork):
             r_noise_labels=r,
             return_features_early=return_features_early,
             feature_indices=feature_indices,
+            feature_selectors=feature_selectors,
             return_logvar=return_logvar,
             augment_labels=augment_labels,
             **fwd_kwargs,

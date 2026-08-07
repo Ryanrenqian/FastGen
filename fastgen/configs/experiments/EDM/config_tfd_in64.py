@@ -4,7 +4,7 @@
 from omegaconf import DictConfig
 
 from fastgen.configs.callbacks import EMA_CONST_CALLBACKS
-from fastgen.configs.data import ImageNet64_Loader_Config
+from fastgen.configs.data import TFD_ImageNet64_Loader_Config
 from fastgen.configs.methods.config_tfd import create_config as create_tfd_config
 from fastgen.configs.net import CKPT_ROOT_DIR, EDM_ImageNet64_Config
 
@@ -15,10 +15,26 @@ def create_config():
     config.model.input_shape = [3, 64, 64]
     config.model.pretrained_model_path = f"{CKPT_ROOT_DIR}/imagenet-64/edm-imagenet-64x64-cond-adm.pth"
 
-    # Two encoder levels, bottleneck, and two decoder levels.
-    config.model.feature_indices = [1, 2, 3, 4, 6]
+    # Official Table 3 / configs/imagenet64/tfd.yaml recipe.
+    config.model.feature_layers = ["enc:6", "enc:11", "bottleneck", "dec:7", "dec:12"]
     config.model.drift_radii = [0.02, 0.05, 0.1, 0.2]
+    config.model.feature_pool_size = 4
+    config.model.feature_noise_p_mean = -1.2
+    config.model.feature_noise_p_std = 1.2
+    config.model.feature_noise_sigma_min = 0.02
+    config.model.feature_noise_sigma_max = 0.1
+    config.model.feature_noise_trunc_resamples = 8
+    config.model.generated_samples_per_condition = 4
+    config.model.positive_samples_per_condition = 4
+    config.model.anchor_samples_per_condition = 4
+    config.model.conditioning_sigma = 80.0
+    config.model.anchor_weight = 1.0
+    config.model.anchor_temperature = 1.0
+    config.model.anchor_margin = 0.5
+    config.model.anchor_bandwidth = 0.0
+    config.model.net_optimizer.optim_type = "adamw"
     config.model.net_optimizer.lr = 2e-6
+    config.model.net_optimizer.betas = (0.9, 0.999)
     config.model.net_optimizer.weight_decay = 0.01
     config.model.precision_amp = "float16"
     config.model.precision_amp_infer = "float16"
@@ -29,11 +45,16 @@ def create_config():
         {key: value for key, value in config.trainer.callbacks.items() if not key.startswith("ema")}
     )
     config.trainer.callbacks.update(EMA_CONST_CALLBACKS)
-    config.dataloader_train = ImageNet64_Loader_Config
-    # With eight ranks this is 128 conditions and 512 generated samples/update.
-    config.dataloader_train.batch_size = 16
-    config.trainer.batch_size_global = 128
+    config.dataloader_train = TFD_ImageNet64_Loader_Config
+    # Seven ranks x 10 class groups x 4 generations = 280 generated images/update.
+    config.dataloader_train.batch_size = 10
+    config.dataloader_train.positives_per_condition = 4
+    config.dataloader_train.anchors_per_condition = 4
+    config.dataloader_train.seed = 10
+    config.trainer.batch_size_global = 70
+    config.trainer.seed = 10
     config.trainer.max_iter = 200000
+    config.trainer.logging_iter = 100
     config.trainer.callbacks.grad_clip.grad_norm = 10.0
     config.log_config.group = "edm_imagenet64_tfd"
     return config

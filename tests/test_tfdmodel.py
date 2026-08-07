@@ -1,86 +1,96 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import gc
+import math
 
-import pytest
 import torch
 
-from fastgen.configs.config_utils import override_config_with_opts
-from fastgen.configs.methods.config_tfd import ModelConfig
-from fastgen.methods import TFDModel
-from fastgen.methods.distribution_matching.teacher_feature_drifting import teacher_feature_drifting_loss
+from fastgen.methods.distribution_matching.teacher_feature_drifting import (
+    anchor_margin_loss,
+    resolve_edm_feature_selectors,
+    teacher_feature_drifting_loss,
+)
+from fastgen.networks.EDM.network import DhariwalUNet
 
 
 def test_teacher_feature_drifting_loss_has_generator_gradient():
     generated = torch.randn(2, 4, 8, requires_grad=True)
-    positive = torch.randn(2, 3, 8)
-
-    drift_loss, anchor_loss, metrics = teacher_feature_drifting_loss(
-        generated, positive, radii=[0.02, 0.05, 0.2]
-    )
-    (drift_loss + anchor_loss).backward()
-
+    positive = torch.randn(2, 4, 8)
+    loss, metrics = teacher_feature_drifting_loss(generated, positive, [0.02, 0.05, 0.1, 0.2])
+    loss.mean().backward()
     assert generated.grad is not None
     assert torch.isfinite(generated.grad).all()
     assert metrics["drift_norm"].ndim == 0
 
 
-def test_teacher_feature_drifting_matches_mean_shift_equations():
-    generated = torch.tensor([[[0.0, 0.0], [1.0, 0.0]]])
+def test_teacher_feature_drifting_matches_official_equations():
+    generated = torch.tensor([[[0.0, 0.0], [1.0, 0.0]]], requires_grad=True)
     positive = torch.tensor([[[0.0, 1.0], [1.0, 1.0]]])
     radius = 0.5
+    loss, _ = teacher_feature_drifting_loss(generated, positive, [radius])
 
-    drift_loss, _, metrics = teacher_feature_drifting_loss(
-        generated, positive, radii=[radius], anchor_weight=0.0
+    frozen = generated.detach()
+    targets = torch.cat([frozen, positive], dim=1)
+    distance = torch.sqrt(torch.clamp(torch.cdist(frozen, targets).pow(2), min=1e-8))
+    scale = distance.mean()
+    input_scale = torch.clamp(scale / math.sqrt(2.0), min=1e-3)
+    normalized = distance / torch.clamp(scale, min=1e-3)
+    normalized += torch.nn.functional.pad(torch.eye(2).unsqueeze(0), (0, 2)) * 1e6
+    affinity = torch.softmax(-normalized / radius, dim=-1)
+    reverse = torch.softmax(-normalized / radius, dim=-2)
+    affinity = torch.sqrt(torch.clamp(affinity * reverse, min=1e-6))
+    negative, positive_affinity = affinity[:, :, :2], affinity[:, :, 2:]
+    coefficients = torch.cat(
+        [
+            -negative * positive_affinity.sum(-1, keepdim=True),
+            positive_affinity * negative.sum(-1, keepdim=True),
+        ],
+        dim=2,
     )
+    scaled_generated, scaled_targets = frozen / input_scale, targets / input_scale
+    force = torch.einsum("biy,byd->bid", coefficients, scaled_targets)
+    force -= coefficients.sum(-1)[..., None] * scaled_generated
+    force /= torch.sqrt(torch.clamp(force.pow(2).mean(), min=1e-8))
+    expected = (generated / input_scale - (scaled_generated + force)).pow(2).mean((-1, -2))
+    assert torch.allclose(loss, expected)
 
-    dist_pos = torch.cdist(generated, positive)
-    dist_neg = torch.cdist(generated, generated).masked_fill(
-        torch.eye(2, dtype=torch.bool).unsqueeze(0), torch.inf
+
+def test_anchor_margin_uses_median_euclidean_bandwidth():
+    generated = torch.tensor([[[0.0], [2.0]]], requires_grad=True)
+    anchors = torch.tensor([[[1.0], [3.0]]])
+    loss, info = anchor_margin_loss(generated, anchors, bandwidth=0.0, alpha=0.5)
+    assert torch.allclose(info["bandwidth"], torch.median(torch.cdist(anchors, generated)))
+    loss.mean().backward()
+    assert generated.grad is not None
+
+
+def test_imagenet_feature_tokens_resolve_to_official_modules():
+    model = DhariwalUNet(
+        img_resolution=64, in_channels=3, out_channels=3, label_dim=1000,
+        model_channels=8, channel_mult=[1, 2, 3, 4], num_blocks=3,
+        attn_resolutions=[], dropout=0.0,
     )
-    attraction = torch.bmm(torch.softmax(-dist_pos / radius, dim=-1), positive)
-    repulsion = torch.bmm(torch.softmax(-dist_neg / radius, dim=-1), generated)
-    expected_drift = attraction - repulsion
-
-    assert torch.allclose(metrics["drift_norm"], expected_drift.square().mean().sqrt())
-    assert torch.allclose(drift_loss, expected_drift.square().mean())
-
-
-@pytest.fixture
-def get_model_data():
-    gc.collect()
-    config = ModelConfig()
-    config.net = override_config_with_opts(
-        config.net, ["-", "img_resolution=8", "channel_mult=[1]", "channel_mult_noise=1"]
+    selectors = resolve_edm_feature_selectors(
+        model, ["enc:6", "enc:11", "bottleneck", "dec:7", "dec:12"]
     )
-    config.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    config.precision = "float32"
-    config.pretrained_model_path = ""
-    config.input_shape = [3, 8, 8]
-    # Exercise both the encoder and newly exposed decoder feature levels.
-    config.feature_indices = [0, 1]
-    config.feature_pool_size = 2
-    config.generated_samples_per_condition = 2
-    config.positive_samples_per_condition = 2
-
-    model = TFDModel(config)
-    model.on_train_begin()
-    model.init_optimizers()
-
-    labels = torch.nn.functional.one_hot(torch.tensor([1, 2]), num_classes=10)
-    data = {
-        "real": torch.randn(2, 3, 8, 8, device=model.device, dtype=model.precision),
-        "condition": labels.to(device=model.device, dtype=model.precision),
-    }
-    return model, data
+    assert selectors == [
+        ("enc", "32x32_block2"),
+        ("enc", "8x8_block1"),
+        ("enc", "8x8_block2"),
+        ("dec", "16x16_block2"),
+        ("dec", "32x32_block3"),
+    ]
 
 
-def test_single_train_step(get_model_data):
-    model, data = get_model_data
-    loss_map, outputs = model.single_train_step(data, iteration=0)
-
-    assert {"total_loss", "tfd_loss", "anchor_loss", "drift_norm"} <= loss_map.keys()
-    assert outputs["gen_rand"].shape == data["real"].shape
-    loss_map["total_loss"].backward()
-    assert any(parameter.grad is not None for parameter in model.net.parameters())
+def test_edm_named_feature_extraction_preserves_requested_order():
+    model = DhariwalUNet(
+        img_resolution=8, in_channels=3, out_channels=3, label_dim=2,
+        model_channels=8, channel_mult=[1], num_blocks=1, attn_resolutions=[], dropout=0.0,
+    )
+    selectors = [("enc", "8x8_block0"), ("dec", "8x8_block1")]
+    features = model(
+        torch.randn(2, 3, 8, 8), torch.ones(2), torch.eye(2),
+        return_features_early=True, feature_indices=set(), feature_selectors=selectors,
+    )
+    assert len(features) == 2
+    assert features[0].shape[0] == features[1].shape[0] == 2

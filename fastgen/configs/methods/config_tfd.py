@@ -18,19 +18,26 @@ from fastgen.utils import LazyCall as L
 
 @attrs.define(slots=False)
 class ModelConfig(BaseModelConfig):
-    feature_indices: list[int] = attrs.field(factory=lambda: [0])
-    feature_noise_level: float = 0.1
+    feature_layers: list[str] = attrs.field(
+        factory=lambda: ["enc:6", "enc:11", "bottleneck", "dec:7", "dec:12"]
+    )
     feature_pool_size: int = 4
-    normalize_features: bool = True
-    drift_radii: list[float] = attrs.field(factory=lambda: [0.02, 0.05, 0.2])
+    drift_radii: list[float] = attrs.field(factory=lambda: [0.02, 0.05, 0.1, 0.2])
+    feature_noise_p_mean: float = -1.2
+    feature_noise_p_std: float = 1.2
+    feature_noise_sigma_min: float = 0.02
+    feature_noise_sigma_max: float = 0.1
+    feature_noise_trunc_resamples: int = 8
 
     generated_samples_per_condition: int = 4
     positive_samples_per_condition: int = 4
-    positive_bank_size: int = 4
+    anchor_samples_per_condition: int = 4
+    conditioning_sigma: float = 80.0
 
     anchor_weight: float = 1.0
     anchor_temperature: float = 1.0
     anchor_margin: float = 0.5
+    anchor_bandwidth: float = 0.0
 
 
 @attrs.define(slots=False)
