@@ -372,6 +372,7 @@ class SongUNet(torch.nn.Module):
 
         super().__init__()
         self.label_dropout = label_dropout
+        self.num_blocks = num_blocks
         emb_channels = model_channels * channel_mult_emb
         noise_channels = model_channels * channel_mult_noise
         cond_channels = noise_channels * (1 + r_timestep)
@@ -534,14 +535,13 @@ class SongUNet(torch.nn.Module):
             else:
                 x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
                 skips.append(x)
-                if "block3" in name:
+                if name.endswith(f"block{self.num_blocks - 1}"):
                     if idx in feature_indices:
                         features.append(x)
                     idx += 1
 
-        # If we have all the features, we can exit early
-        if return_features_early:
-            assert len(features) == len(feature_indices), f"{len(features)} != {len(feature_indices)}"
+        # If all requested features are in the encoder, we can exit early.
+        if return_features_early and len(features) == len(feature_indices):
             return features
 
         # Decoder.
@@ -559,6 +559,18 @@ class SongUNet(torch.nn.Module):
                 if x.shape[1] != block.in_channels:
                     x = torch.cat([x, skips.pop()], dim=1)
                 x = block(x, emb)
+                if name.endswith(f"block{self.num_blocks}"):
+                    if idx in feature_indices:
+                        features.append(x)
+                    idx += 1
+                    if return_features_early and len(features) == len(feature_indices):
+                        return features
+
+        if return_features_early:
+            raise ValueError(
+                f"Requested feature indices {sorted(feature_indices)} are not available; "
+                f"EDM exposed {idx} encoder/decoder feature levels"
+            )
 
         if len(feature_indices) == 0:
             # no features requested, return only the model output
@@ -601,6 +613,7 @@ class DhariwalUNet(torch.nn.Module):
     ):
         super().__init__()
         self.label_dropout = label_dropout
+        self.num_blocks = num_blocks
         emb_channels = model_channels * channel_mult_emb
         cond_channels = model_channels * (1 + r_timestep)
         init = dict(init_mode="kaiming_uniform", init_weight=np.sqrt(1 / 3), init_bias=np.sqrt(1 / 3))
@@ -715,22 +728,32 @@ class DhariwalUNet(torch.nn.Module):
         idx, features = 0, []
         for name, block in self.enc.items():
             x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
-            if "block2" in name:
+            if name.endswith(f"block{self.num_blocks - 1}"):
                 if idx in feature_indices:
                     features.append(x)
                 idx += 1
             skips.append(x)
 
-        # If we have all the features, we can exit early
-        if return_features_early:
-            assert len(features) == len(feature_indices)
+        # If all requested features are in the encoder, we can exit early.
+        if return_features_early and len(features) == len(feature_indices):
             return features
 
         # Decoder.
-        for block in self.dec.values():
+        for name, block in self.dec.items():
             if x.shape[1] != block.in_channels:
                 x = torch.cat([x, skips.pop()], dim=1)
             x = block(x, emb)
+            if name.endswith(f"block{self.num_blocks}"):
+                if idx in feature_indices:
+                    features.append(x)
+                idx += 1
+                if return_features_early and len(features) == len(feature_indices):
+                    return features
+        if return_features_early:
+            raise ValueError(
+                f"Requested feature indices {sorted(feature_indices)} are not available; "
+                f"EDM exposed {idx} encoder/decoder feature levels"
+            )
         x = self.out_conv(silu(self.out_norm(x)))
 
         if len(feature_indices) == 0:
