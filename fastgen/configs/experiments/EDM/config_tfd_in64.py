@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from omegaconf import DictConfig
-
-from fastgen.configs.callbacks import EMA_CONST_CALLBACKS
 from fastgen.configs.data import TFD_ImageNet64_Loader_Config
 from fastgen.configs.methods.config_tfd import create_config as create_tfd_config
 from fastgen.configs.net import CKPT_ROOT_DIR, EDM_ImageNet64_Config
@@ -36,15 +33,12 @@ def create_config():
     config.model.net_optimizer.lr = 2e-6
     config.model.net_optimizer.betas = (0.9, 0.999)
     config.model.net_optimizer.weight_decay = 0.01
-    config.model.precision_amp = "float16"
-    config.model.precision_amp_infer = "float16"
-    config.model.grad_scaler_enabled = True
-
-    config.model.use_ema = ["ema_9999", "ema_99995", "ema_9996"]
-    config.trainer.callbacks = DictConfig(
-        {key: value for key, value in config.trainer.callbacks.items() if not key.startswith("ema")}
-    )
-    config.trainer.callbacks.update(EMA_CONST_CALLBACKS)
+    # The authors' EDM flag is named use_fp16, but its implementation uses
+    # torch.bfloat16 and Accelerator(mixed_precision="no") without scaling.
+    config.model.precision_amp = "bfloat16"
+    config.model.precision_amp_infer = "bfloat16"
+    config.model.grad_scaler_enabled = False
+    config.model.use_ema = False
     config.dataloader_train = TFD_ImageNet64_Loader_Config
     # Seven ranks x 10 class groups x 4 generations = 280 generated images/update.
     config.dataloader_train.batch_size = 10
@@ -53,7 +47,8 @@ def create_config():
     config.dataloader_train.seed = 10
     config.trainer.batch_size_global = 70
     config.trainer.seed = 10
-    config.trainer.max_iter = 200000
+    # FastGen optimizes range(1, max_iter), hence +1 for 200,000 updates.
+    config.trainer.max_iter = 200001
     config.trainer.logging_iter = 100
     config.trainer.callbacks.grad_clip.grad_norm = 10.0
     config.log_config.group = "edm_imagenet64_tfd"

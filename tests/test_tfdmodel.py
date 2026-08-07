@@ -10,6 +10,7 @@ from fastgen.methods.distribution_matching.teacher_feature_drifting import (
     resolve_edm_feature_selectors,
     teacher_feature_drifting_loss,
 )
+from fastgen.configs.experiments.EDM.config_tfd_in64 import create_config
 from fastgen.networks.EDM.network import DhariwalUNet
 
 
@@ -94,3 +95,11 @@ def test_edm_named_feature_extraction_preserves_requested_order():
     )
     assert len(features) == 2
     assert features[0].shape[0] == features[1].shape[0] == 2
+
+
+def test_imagenet_recipe_uses_official_bfloat16_semantics_and_update_count():
+    config = create_config()
+    assert config.model.precision_amp == "bfloat16"
+    assert config.model.grad_scaler_enabled is False
+    assert config.model.use_ema is False
+    assert config.trainer.max_iter == 200001
