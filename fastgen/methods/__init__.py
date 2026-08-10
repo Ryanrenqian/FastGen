@@ -10,6 +10,7 @@ from fastgen.methods.distribution_matching.f_distill import FdistillModel as Fdi
 from fastgen.methods.distribution_matching.causvid import CausVidModel as CausVidModel
 from fastgen.methods.distribution_matching.self_forcing import SelfForcingModel as SelfForcingModel
 from fastgen.methods.distribution_matching.teacher_feature_drifting import TFDModel as TFDModel
+from fastgen.methods.distribution_matching.wan_teacher_feature_drifting import WanTFDModel as WanTFDModel
 
 from fastgen.methods.consistency_model.CM import CMModel as CMModel
 from fastgen.methods.consistency_model.TCM import TCMModel as TCMModel

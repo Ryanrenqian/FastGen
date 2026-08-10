@@ -34,6 +34,14 @@ def _pool_and_flatten_feature(feature: torch.Tensor, pool_size: int) -> torch.Te
         if feature.shape[-1] % pool_size or feature.shape[-2] % pool_size:
             raise ValueError(f"feature_pool_size={pool_size} must divide {feature.shape[-2:]}")
         feature = F.avg_pool2d(feature, pool_size, pool_size)
+    elif feature.ndim == 5 and pool_size > 1:
+        if feature.shape[-1] % pool_size or feature.shape[-2] % pool_size:
+            raise ValueError(f"feature_pool_size={pool_size} must divide {feature.shape[-2:]}")
+        feature = F.avg_pool3d(
+            feature,
+            kernel_size=(1, pool_size, pool_size),
+            stride=(1, pool_size, pool_size),
+        )
     return feature.flatten(start_dim=1)
 
 
@@ -155,8 +163,10 @@ class TFDModel(FastGenModel):
             raise ValueError("TFDModel supports one-step students only")
         if self.config.generated_samples_per_condition < 2:
             raise ValueError("generated_samples_per_condition must be at least 2")
-        if not self.config.feature_layers:
-            raise ValueError("feature_layers must select at least one teacher layer")
+        if not self.config.feature_layers and not self.config.feature_indices:
+            raise ValueError("TFD must select at least one teacher feature layer")
+        if self.config.feature_layers and self.config.feature_indices:
+            raise ValueError("Use feature_layers or feature_indices, not both")
         if self.config.feature_noise_sigma_min <= 0:
             raise ValueError("feature_noise_sigma_min must be positive")
         if self.config.feature_noise_sigma_max < self.config.feature_noise_sigma_min:
@@ -164,9 +174,11 @@ class TFDModel(FastGenModel):
         super().build_model()
         self.build_teacher()
         self.load_student_weights_and_ema()
-        self.feature_selectors = resolve_edm_feature_selectors(
-            self.teacher.model, self.config.feature_layers
-        )
+        self.feature_selectors = None
+        if self.config.feature_layers:
+            self.feature_selectors = resolve_edm_feature_selectors(
+                self.teacher.model, self.config.feature_layers
+            )
 
     def _sample_group_sigmas(self, batch_size: int, device: torch.device) -> torch.Tensor:
         cfg = self.config
@@ -194,12 +206,17 @@ class TFDModel(FastGenModel):
         # The authors call the teacher with force_fp32=True even though the
         # generator recipe uses FP16. Preserve that behavior here.
         with context, torch.autocast(device_type=samples.device.type, enabled=False):
+            feature_kwargs = (
+                {"feature_selectors": self.feature_selectors}
+                if self.feature_selectors is not None
+                else {"feature_indices": set(self.config.feature_indices)}
+            )
             features = self.teacher(
                 noisy.float(),
                 sigmas.float(),
                 condition=condition.float() if isinstance(condition, torch.Tensor) else condition,
                 return_features_early=True,
-                feature_selectors=self.feature_selectors,
+                **feature_kwargs,
             )
         return [_pool_and_flatten_feature(feature, self.config.feature_pool_size) for feature in features]
 

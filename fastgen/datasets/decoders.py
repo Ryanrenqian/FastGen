@@ -4,6 +4,7 @@
 import av
 import numpy as np
 import io
+import os
 import re
 import time
 import torch
@@ -78,7 +79,10 @@ def decode_video_full(
 
 
 def decode_video_segment(
-    key: str, data: bytes, num_frames: int, output_format: str = "torch"
+    key: str,
+    data: bytes | str | os.PathLike,
+    num_frames: int,
+    output_format: str = "torch",
 ) -> Optional[Union[np.ndarray, torch.Tensor]]:
     """Decodes a randomly selected segment of approximately num_frames from a video.
 
@@ -110,8 +114,8 @@ def decode_video_segment(
     frames = []
 
     try:
-        # Use BytesIO to treat the byte data as a file
-        with av.open(io.BytesIO(data), mode="r") as container:
+        source = io.BytesIO(data) if isinstance(data, bytes) else os.fspath(data)
+        with av.open(source, mode="r") as container:
             if not container.streams.video:
                 logger.warning(f"Key '{key}': No video stream found.")
                 return None

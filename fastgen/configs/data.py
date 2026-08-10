@@ -5,6 +5,7 @@ import os
 
 from fastgen.datasets.class_cond_dataloader import ImageLoader
 from fastgen.datasets.tfd_class_cond_dataloader import TFDImageNetLoader, TFDImageNetLMDBLoader
+from fastgen.datasets.csv_video_dataloader import CSVVideoLoader
 from fastgen.datasets.wds_dataloaders import (
     WDSLoader,
     ImageWDSLoader,
@@ -46,6 +47,17 @@ VideoLoaderConfig = L(VideoWDSLoader)(
     sequence_length=81,
     img_size=(832, 480),
     num_workers=2,
+)
+
+CSVVideoLoaderConfig = L(CSVVideoLoader)(
+    index_path="/path/to/video_index.csv",
+    batch_size=1,
+    sequence_length=81,
+    img_size=(1280, 704),
+    caption_columns=["caption_l3", "caption_l2", "caption_l1"],
+    negative_prompt="",
+    num_workers=2,
+    shuffle_size=1000,
 )
 
 VideoLatentLoaderConfig = L(WDSLoader)(

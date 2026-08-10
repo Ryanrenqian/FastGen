@@ -21,6 +21,7 @@ class ModelConfig(BaseModelConfig):
     feature_layers: list[str] = attrs.field(
         factory=lambda: ["enc:6", "enc:11", "bottleneck", "dec:7", "dec:12"]
     )
+    feature_indices: list[int] = attrs.field(factory=list)
     feature_pool_size: int = 4
     drift_radii: list[float] = attrs.field(factory=lambda: [0.02, 0.05, 0.1, 0.2])
     feature_noise_p_mean: float = -1.2
@@ -33,6 +34,12 @@ class ModelConfig(BaseModelConfig):
     positive_samples_per_condition: int = 4
     anchor_samples_per_condition: int = 4
     conditioning_sigma: float = 80.0
+
+    teacher_positive_fill: bool = False
+    teacher_positive_sample_steps: int = 50
+    teacher_positive_guidance_scale: float = 6.0
+    teacher_positive_batch_size: int = 1
+    teacher_positive_sample_kwargs: dict = attrs.field(factory=dict)
 
     anchor_weight: float = 1.0
     anchor_temperature: float = 1.0

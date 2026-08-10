@@ -368,7 +368,8 @@ class WanI2V(Wan):
         latents = self.noise_scheduler.latents(noise=noise, t_init=t_init)
 
         # Main sampling loop
-        for idx, timestep in enumerate(tqdm(timesteps)):
+        show_progress = kwargs.pop("show_progress", True)
+        for idx, timestep in enumerate(tqdm(timesteps, disable=not show_progress)):
             t = (timestep / self.unipc_scheduler.config.num_train_timesteps).expand(latents.shape[0])
             t = self.noise_scheduler.safe_clamp(t, min=self.noise_scheduler.min_t, max=self.noise_scheduler.max_t).to(
                 latents.dtype
