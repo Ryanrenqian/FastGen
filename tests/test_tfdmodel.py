@@ -2,16 +2,50 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from types import SimpleNamespace
 
 import torch
 
 from fastgen.methods.distribution_matching.teacher_feature_drifting import (
     anchor_margin_loss,
     resolve_edm_feature_selectors,
+    TFDModel,
     teacher_feature_drifting_loss,
 )
 from fastgen.configs.experiments.EDM.config_tfd_in64 import create_config
+from fastgen.configs.experiments.EDM.config_tfd_in64_n8 import create_config as create_n8_config
 from fastgen.networks.EDM.network import DhariwalUNet
+
+
+class _IdentityNoiseScheduler:
+    def forward_process(self, samples, noise, sigmas):
+        del noise, sigmas
+        return samples
+
+
+class _RecordingTeacher(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.noise_scheduler = _IdentityNoiseScheduler()
+        self.batch_sizes = []
+
+    def forward(self, samples, sigmas, **kwargs):
+        del sigmas, kwargs
+        self.batch_sizes.append(samples.shape[0])
+        return [samples * 2.0, samples.square()]
+
+
+def _feature_test_model(*, checkpoint_generated=False, reference_chunk_size=0):
+    model = TFDModel.__new__(TFDModel)
+    torch.nn.Module.__init__(model)
+    model.teacher = _RecordingTeacher()
+    model.feature_selectors = [("enc", "first"), ("enc", "second")]
+    model.config = SimpleNamespace(
+        feature_pool_size=1,
+        teacher_generated_checkpoint=checkpoint_generated,
+        teacher_reference_chunk_size=reference_chunk_size,
+    )
+    return model
 
 
 def test_teacher_feature_drifting_loss_has_generator_gradient():
@@ -22,6 +56,30 @@ def test_teacher_feature_drifting_loss_has_generator_gradient():
     assert generated.grad is not None
     assert torch.isfinite(generated.grad).all()
     assert metrics["drift_norm"].ndim == 0
+
+
+def test_generated_teacher_checkpoint_recomputes_and_preserves_gradient():
+    model = _feature_test_model(checkpoint_generated=True)
+    samples = torch.randn(6, 3, 4, 4, requires_grad=True)
+    features = model._extract_teacher_features(
+        samples, torch.randn(6, 2), torch.ones(6), keep_input_grad=True
+    )
+    sum(feature.mean() for feature in features).backward()
+
+    assert samples.grad is not None
+    assert torch.isfinite(samples.grad).all()
+    assert model.teacher.batch_sizes == [6, 6]
+
+
+def test_reference_teacher_features_are_chunked_without_gradients():
+    model = _feature_test_model(reference_chunk_size=3)
+    features = model._extract_teacher_features(
+        torch.randn(8, 3, 4, 4), torch.randn(8, 2), torch.ones(8), keep_input_grad=False
+    )
+
+    assert model.teacher.batch_sizes == [3, 3, 2]
+    assert [feature.shape for feature in features] == [(8, 48), (8, 48)]
+    assert all(not feature.requires_grad for feature in features)
 
 
 def test_teacher_feature_drifting_matches_official_equations():
@@ -106,3 +164,15 @@ def test_imagenet_recipe_uses_official_bfloat16_semantics_and_update_count():
     assert config.model.net_scheduler.f_start == [0.0]
     assert config.trainer.save_ckpt_iter == 500
     assert config.dataloader_train.dataset_path.endswith("imagenet-64x64_lmdb")
+
+
+def test_imagenet_n8_recipe_enables_memory_controls():
+    config = create_n8_config()
+    assert config.model.generated_samples_per_condition == 8
+    assert config.model.positive_samples_per_condition == 8
+    assert config.model.anchor_samples_per_condition == 8
+    assert config.model.teacher_generated_checkpoint is True
+    assert config.model.teacher_reference_chunk_size == 18
+    assert config.dataloader_train.batch_size == 9
+    assert config.trainer.batch_size_global == 72
+    assert config.trainer.max_iter == 1001

@@ -32,6 +32,8 @@ class ModelConfig(BaseModelConfig):
     generated_samples_per_condition: int = 4
     positive_samples_per_condition: int = 4
     anchor_samples_per_condition: int = 4
+    teacher_generated_checkpoint: bool = False
+    teacher_reference_chunk_size: int = 0
     conditioning_sigma: float = 80.0
 
     anchor_weight: float = 1.0

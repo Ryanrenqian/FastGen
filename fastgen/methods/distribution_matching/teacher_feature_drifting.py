@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Sequence, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from fastgen.methods import FastGenModel
 
@@ -26,6 +27,18 @@ def _repeat_condition(condition: Any, repeats: int) -> Any:
         return tuple(_repeat_condition(value, repeats) for value in condition)
     if isinstance(condition, list):
         return [_repeat_condition(value, repeats) for value in condition]
+    return condition
+
+
+def _slice_condition(condition: Any, start: int, end: int) -> Any:
+    if isinstance(condition, torch.Tensor):
+        return condition[start:end]
+    if isinstance(condition, dict):
+        return {key: _slice_condition(value, start, end) for key, value in condition.items()}
+    if isinstance(condition, tuple):
+        return tuple(_slice_condition(value, start, end) for value in condition)
+    if isinstance(condition, list):
+        return [_slice_condition(value, start, end) for value in condition]
     return condition
 
 
@@ -190,18 +203,57 @@ class TFDModel(FastGenModel):
         self, samples: torch.Tensor, condition: Any, sigmas: torch.Tensor, *, keep_input_grad: bool
     ) -> list[torch.Tensor]:
         noisy = self.teacher.noise_scheduler.forward_process(samples, torch.randn_like(samples), sigmas)
-        context = torch.enable_grad() if keep_input_grad else torch.no_grad()
-        # The authors call the teacher with force_fp32=True even though the
-        # generator recipe uses FP16. Preserve that behavior here.
-        with context, torch.autocast(device_type=samples.device.type, enabled=False):
-            features = self.teacher(
-                noisy.float(),
-                sigmas.float(),
-                condition=condition.float() if isinstance(condition, torch.Tensor) else condition,
-                return_features_early=True,
-                feature_selectors=self.feature_selectors,
-            )
-        return [_pool_and_flatten_feature(feature, self.config.feature_pool_size) for feature in features]
+
+        def teacher_forward(
+            noisy_chunk: torch.Tensor, sigma_chunk: torch.Tensor, condition_chunk: Any
+        ) -> tuple[torch.Tensor, ...]:
+            # The authors call the teacher with force_fp32=True even though the
+            # generator recipe uses FP16. Preserve that behavior here.
+            with torch.autocast(device_type=samples.device.type, enabled=False):
+                return tuple(
+                    self.teacher(
+                        noisy_chunk.float(),
+                        sigma_chunk.float(),
+                        condition=(
+                            condition_chunk.float()
+                            if isinstance(condition_chunk, torch.Tensor)
+                            else condition_chunk
+                        ),
+                        return_features_early=True,
+                        feature_selectors=self.feature_selectors,
+                    )
+                )
+
+        if keep_input_grad:
+            if self.config.teacher_generated_checkpoint:
+                features = checkpoint(
+                    teacher_forward, noisy, sigmas, condition, use_reentrant=False
+                )
+            else:
+                features = teacher_forward(noisy, sigmas, condition)
+            return [_pool_and_flatten_feature(feature, self.config.feature_pool_size) for feature in features]
+
+        chunk_size = int(self.config.teacher_reference_chunk_size)
+        if chunk_size <= 0:
+            chunk_size = samples.shape[0]
+        layer_chunks: list[list[torch.Tensor]] | None = None
+        with torch.no_grad():
+            for start in range(0, samples.shape[0], chunk_size):
+                end = min(start + chunk_size, samples.shape[0])
+                chunk_features = teacher_forward(
+                    noisy[start:end], sigmas[start:end], _slice_condition(condition, start, end)
+                )
+                pooled = [
+                    _pool_and_flatten_feature(feature, self.config.feature_pool_size)
+                    for feature in chunk_features
+                ]
+                if layer_chunks is None:
+                    layer_chunks = [[] for _ in pooled]
+                for chunks, feature in zip(layer_chunks, pooled):
+                    chunks.append(feature)
+        if layer_chunks is None:
+            raise ValueError("Teacher feature extraction received an empty batch")
+        return [torch.cat(chunks, dim=0) for chunks in layer_chunks]
 
     def _get_outputs(self, generated: torch.Tensor, input_student: torch.Tensor) -> Dict[str, torch.Tensor | Callable]:
         count = self.config.generated_samples_per_condition
