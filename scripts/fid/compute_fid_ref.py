@@ -21,6 +21,8 @@ def main() -> None:
     parser.add_argument("--dest", required=True, help="Destination .npz file")
     parser.add_argument("--batch", type=int, default=64, help="Maximum batch size per GPU")
     parser.add_argument("--workers", type=int, default=3, help="DataLoader workers per rank")
+    parser.add_argument("--num", type=int, default=None, help="Optional deterministic dataset subset size")
+    parser.add_argument("--seed", type=int, default=0, help="Subset selection seed")
     args = parser.parse_args()
 
     if not args.dest.endswith(".npz"):
@@ -33,6 +35,8 @@ def main() -> None:
         detector,
         feature_dim=2048,
         image_path=args.data,
+        num_expected=args.num,
+        seed=args.seed,
         max_batch_size=args.batch,
         num_workers=args.workers,
         device=device,

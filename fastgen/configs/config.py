@@ -59,6 +59,8 @@ class EvalConfig:
     samples_dir: str = "samples"
     # Remove generated samples after metrics have been written
     cleanup_samples: bool = True
+    # Optional non-standard reference statistics path
+    fid_ref_path: Optional[str] = None
 
 
 @attrs.define(slots=False)

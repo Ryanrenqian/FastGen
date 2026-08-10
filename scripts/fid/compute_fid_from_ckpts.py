@@ -224,6 +224,7 @@ def main(config: BaseConfig):
         config.dataloader_train.batch_size,
         dataset,
         device=model.device,
+        ref_path=config.eval.fid_ref_path,
     )
 
     if get_rank() == 0:

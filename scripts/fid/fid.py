@@ -96,12 +96,23 @@ def calculate_fid_from_inception_stats(mu, sigma, mu_ref, sigma_ref):
 
 
 def calc(
-    samples_dir, num_expected, seed, min_ckpt, max_ckpt, batch, dataset, regenerate=False, device=torch.device("cuda")
+    samples_dir,
+    num_expected,
+    seed,
+    min_ckpt,
+    max_ckpt,
+    batch,
+    dataset,
+    regenerate=False,
+    device=torch.device("cuda"),
+    ref_path=None,
 ):
     """Calculate FID for a given set of images."""
 
     ref = None
-    if dataset == "cifar10":
+    if ref_path is not None:
+        ref_path = os.fspath(ref_path)
+    elif dataset == "cifar10":
         ref_path = f"{DATA_ROOT_DIR}/fid-refs/cifar10-32x32.npz"
     elif dataset == "imagenet64":
         ref_path = f"{DATA_ROOT_DIR}/fid-refs/imagenet-64x64.npz"
