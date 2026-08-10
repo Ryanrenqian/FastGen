@@ -157,7 +157,13 @@ def main(config: BaseConfig):
             if batch_size == 0:
                 continue
 
-            if dataset == "imagenet256":
+            if dataset == "imagenet64":
+                # Match the TFD paper protocol: global sample IDs 0..49,999
+                # map cyclically to ImageNet classes, yielding exactly 50
+                # samples per class regardless of distributed rank count.
+                class_indices = batch_seeds.to(device=model.device) % inference_net.label_dim
+                condition = torch.eye(inference_net.label_dim, **ctx)[class_indices]
+            elif dataset == "imagenet256":
                 condition = torch.randint(1000, size=[batch_size], device=model.device)
             elif conditional:
                 condition = torch.eye(inference_net.label_dim, **ctx)[
@@ -235,7 +241,7 @@ def main(config: BaseConfig):
                 and ckpt_num <= config.eval.max_ckpt
                 and ckpt_num not in runs_visited
             ]
-        if runs_visited_new:
+        if runs_visited_new and config.eval.cleanup_samples:
             remove_iter_dirs(samples_dir, runs_visited_new)
 
 

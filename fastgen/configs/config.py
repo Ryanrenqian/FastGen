@@ -57,6 +57,8 @@ class EvalConfig:
     max_ckpt: int = 100000000
     # Directory to save samples
     samples_dir: str = "samples"
+    # Remove generated samples after metrics have been written
+    cleanup_samples: bool = True
 
 
 @attrs.define(slots=False)
