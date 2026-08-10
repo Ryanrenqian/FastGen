@@ -180,6 +180,13 @@ class TFDModel(FastGenModel):
         self.feature_selectors = resolve_edm_feature_selectors(
             self.teacher.model, self.config.feature_layers
         )
+        if self.config.teacher_attention_backend not in {"original", "sdpa"}:
+            raise ValueError(
+                f"Unsupported teacher attention backend: {self.config.teacher_attention_backend}"
+            )
+        for module in self.teacher.modules():
+            if hasattr(module, "attention_backend"):
+                module.attention_backend = self.config.teacher_attention_backend
 
     def _sample_group_sigmas(self, batch_size: int, device: torch.device) -> torch.Tensor:
         cfg = self.config

@@ -14,7 +14,7 @@ from fastgen.methods.distribution_matching.teacher_feature_drifting import (
 )
 from fastgen.configs.experiments.EDM.config_tfd_in64 import create_config
 from fastgen.configs.experiments.EDM.config_tfd_in64_n8 import create_config as create_n8_config
-from fastgen.networks.EDM.network import DhariwalUNet
+from fastgen.networks.EDM.network import AttentionOp, DhariwalUNet
 
 
 class _IdentityNoiseScheduler:
@@ -56,6 +56,30 @@ def test_teacher_feature_drifting_loss_has_generator_gradient():
     assert generated.grad is not None
     assert torch.isfinite(generated.grad).all()
     assert metrics["drift_norm"].ndim == 0
+
+
+def test_sdpa_matches_original_attention_forward_and_backward():
+    q_original = torch.randn(3, 8, 16, requires_grad=True)
+    k_original = torch.randn(3, 8, 16, requires_grad=True)
+    v_original = torch.randn(3, 8, 16, requires_grad=True)
+    weights = AttentionOp.apply(q_original, k_original)
+    original = torch.einsum("nqk,nck->ncq", weights, v_original)
+    original.square().mean().backward()
+
+    q_sdpa = q_original.detach().clone().requires_grad_(True)
+    k_sdpa = k_original.detach().clone().requires_grad_(True)
+    v_sdpa = v_original.detach().clone().requires_grad_(True)
+    sdpa = torch.nn.functional.scaled_dot_product_attention(
+        q_sdpa.transpose(1, 2), k_sdpa.transpose(1, 2), v_sdpa.transpose(1, 2)
+    ).transpose(1, 2)
+    sdpa.square().mean().backward()
+
+    assert torch.allclose(sdpa, original, atol=1e-6, rtol=1e-5)
+    for sdpa_grad, original_grad in zip(
+        (q_sdpa.grad, k_sdpa.grad, v_sdpa.grad),
+        (q_original.grad, k_original.grad, v_original.grad),
+    ):
+        assert torch.allclose(sdpa_grad, original_grad, atol=1e-6, rtol=1e-5)
 
 
 def test_generated_teacher_checkpoint_recomputes_and_preserves_gradient():
@@ -173,6 +197,7 @@ def test_imagenet_n8_recipe_enables_memory_controls():
     assert config.model.anchor_samples_per_condition == 8
     assert config.model.teacher_generated_checkpoint is True
     assert config.model.teacher_reference_chunk_size == 18
+    assert config.model.teacher_attention_backend == "sdpa"
     assert config.dataloader_train.batch_size == 9
     assert config.trainer.batch_size_global == 72
     assert config.trainer.max_iter == 1001

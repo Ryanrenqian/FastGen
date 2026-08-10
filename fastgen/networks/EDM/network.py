@@ -222,6 +222,7 @@ class UNetBlock(torch.nn.Module):
         init=dict(),
         init_zero=dict(init_weight=0),
         init_attn=None,
+        attention_backend="original",
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -233,6 +234,9 @@ class UNetBlock(torch.nn.Module):
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
+        if attention_backend not in {"original", "sdpa"}:
+            raise ValueError(f"Unsupported attention backend: {attention_backend}")
+        self.attention_backend = attention_backend
 
         self.norm0 = GroupNorm(num_channels=in_channels, eps=eps)
         self.conv0 = Conv2d(
@@ -292,8 +296,17 @@ class UNetBlock(torch.nn.Module):
                 .reshape(x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3, -1)
                 .unbind(2)
             )
-            w = AttentionOp.apply(q, k)
-            a = torch.einsum("nqk,nck->ncq", w, v)
+            if self.attention_backend == "sdpa":
+                a = torch.nn.functional.scaled_dot_product_attention(
+                    q.transpose(1, 2),
+                    k.transpose(1, 2),
+                    v.transpose(1, 2),
+                    dropout_p=0.0,
+                    is_causal=False,
+                ).transpose(1, 2)
+            else:
+                w = AttentionOp.apply(q, k)
+                a = torch.einsum("nqk,nck->ncq", w, v)
             x = self.proj(a.reshape(*x.shape)).add_(x)
             x = x * self.skip_scale
         return x
