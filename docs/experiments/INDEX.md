@@ -4,6 +4,7 @@ Track all hypotheses in one place.
 
 | Hypothesis ID | Title | Status | Grade | Branch | Worktree | Commit Range | Result Summary | Record |
 |---------------|-------|--------|-------|--------|----------|--------------|----------------|--------|
+| HYP-20260810-09 | TFD ImageNet-64 official DMD2 LMDB retraining | preparing_data | exploratory | feature/tfd-imagenet64-paper | required | pending | official LMDB switch in progress | [link](./HYP-20260810-09.md) |
 | HYP-20260807-05 | TFD ImageNet-64 reproduction | preparing_data | exploratory | feature/teacher-feature-drifting | required | pending | pending | [link](./HYP-20260807-05.md) |
 | HYP-20260807-04 | TFD CIFAR-10 1000-step exploratory continuation | running | exploratory | feature/teacher-feature-drifting | required | 7c1136a75e6e | pending | [link](./HYP-20260807-04.md) |
 | HYP-20260807-03 | TFD CIFAR-10 remote smoke training | completed | exploratory | feature/teacher-feature-drifting | required | 7c1136a75e6e | 100 steps stable; checkpoints saved | [link](./HYP-20260807-03.md) |

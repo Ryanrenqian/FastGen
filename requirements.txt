@@ -12,6 +12,7 @@ einops
 jupyter
 hydra-core
 imageio
+lmdb
 tqdm
 webdataset
 av

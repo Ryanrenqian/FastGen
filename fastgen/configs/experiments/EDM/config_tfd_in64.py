@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from fastgen.configs.data import TFD_ImageNet64_Loader_Config
+from fastgen.configs.data import TFD_ImageNet64_LMDB_Loader_Config
 from fastgen.configs.methods.config_tfd import create_config as create_tfd_config
 from fastgen.configs.net import CKPT_ROOT_DIR, EDM_ImageNet64_Config
 
@@ -40,7 +40,7 @@ def create_config():
     config.model.precision_amp_infer = "bfloat16"
     config.model.grad_scaler_enabled = False
     config.model.use_ema = False
-    config.dataloader_train = TFD_ImageNet64_Loader_Config
+    config.dataloader_train = TFD_ImageNet64_LMDB_Loader_Config
     # Seven ranks x 10 class groups x 4 generations = 280 generated images/update.
     config.dataloader_train.batch_size = 10
     config.dataloader_train.positives_per_condition = 4
