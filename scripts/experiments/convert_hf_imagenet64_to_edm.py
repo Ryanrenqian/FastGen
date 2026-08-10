@@ -15,7 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--expected-images", type=int, default=1_281_167)
+    parser.add_argument("--split", choices=["train", "validation"], default="train")
+    parser.add_argument("--expected-images", type=int, default=None)
     parser.add_argument("--expected-classes", type=int, default=1_000)
     parser.add_argument("--batch-size", type=int, default=4_096)
     return parser.parse_args()
@@ -34,15 +35,18 @@ def normalize_image(data: bytes) -> tuple[bytes, str]:
 
 def main() -> None:
     args = parse_args()
-    shards = sorted(args.input_dir.glob("train-*.parquet"))
+    expected_images = args.expected_images
+    if expected_images is None:
+        expected_images = 1_281_167 if args.split == "train" else 50_000
+    shards = sorted(args.input_dir.glob(f"{args.split}-*.parquet"))
     if not shards:
-        raise FileNotFoundError(f"No train-*.parquet shards found in {args.input_dir}")
+        raise FileNotFoundError(f"No {args.split}-*.parquet shards found in {args.input_dir}")
     if args.output.exists():
         raise FileExistsError(f"Refusing to overwrite existing output: {args.output}")
 
     total_rows = sum(pq.ParquetFile(shard).metadata.num_rows for shard in shards)
-    if total_rows != args.expected_images:
-        raise ValueError(f"Expected {args.expected_images} rows, found {total_rows}")
+    if total_rows != expected_images:
+        raise ValueError(f"Expected {expected_images} rows, found {total_rows}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     labels: list[list[object]] = []
