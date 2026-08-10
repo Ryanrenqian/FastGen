@@ -197,7 +197,7 @@ def test_imagenet_n8_recipe_enables_memory_controls():
     assert config.model.anchor_samples_per_condition == 8
     assert config.model.teacher_generated_checkpoint is True
     assert config.model.teacher_reference_chunk_size == 18
-    assert config.model.teacher_attention_backend == "sdpa"
+    assert config.model.teacher_attention_backend == "original"
     assert config.dataloader_train.batch_size == 9
     assert config.trainer.batch_size_global == 72
-    assert config.trainer.max_iter == 1001
+    assert config.trainer.max_iter == 200001

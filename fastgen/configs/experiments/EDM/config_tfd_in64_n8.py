@@ -11,10 +11,13 @@ def create_config():
     config.model.anchor_samples_per_condition = 8
     config.model.teacher_generated_checkpoint = True
     config.model.teacher_reference_chunk_size = 18
-    config.model.teacher_attention_backend = "sdpa"
+    # The teacher intentionally runs in FP32 to match the official TFD recipe.
+    # FP32 SDPA uses slightly more peak memory on the current L20Z stack, so
+    # retain the original attention implementation for this experiment.
+    config.model.teacher_attention_backend = "original"
     config.dataloader_train.batch_size = 9
     config.dataloader_train.positives_per_condition = 8
     config.dataloader_train.anchors_per_condition = 8
     config.trainer.batch_size_global = 72
-    config.trainer.max_iter = 1001
+    config.trainer.max_iter = 200001
     return config
