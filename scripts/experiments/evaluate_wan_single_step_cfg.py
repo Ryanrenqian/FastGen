@@ -281,7 +281,9 @@ def main() -> None:
                 uncond_flow = net(noisy, t, condition=uncondition, fwd_pred_type="flow")
 
             for scale in args.cfg_scales:
-                guided_flow = uncond_flow + scale * (cond_flow - uncond_flow)
+                # Keep the conditional-only baseline bit-identical to the model
+                # output instead of reconstructing it through BF16 arithmetic.
+                guided_flow = cond_flow if scale == 1.0 else uncond_flow + scale * (cond_flow - uncond_flow)
                 restored_latent = net.noise_scheduler.flow_to_x0(noisy, guided_flow, t)
                 restored_latent = preserve_first_latent(restored_latent, first_frame)
                 restored = decode(net, restored_latent)
