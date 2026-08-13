@@ -134,7 +134,7 @@ def caption(row: dict[str, str]) -> str:
     return next(
         (
             row.get(key, "").strip()
-            for key in ("caption_l3", "caption_l2", "caption_l1")
+            for key in ("caption", "caption_l3", "caption_l2", "caption_l1")
             if row.get(key, "").strip()
         ),
         "",
@@ -311,6 +311,8 @@ def main() -> None:
         source = transform_video(frames, args.frames, (args.width, args.height))["real"]
         source = source.unsqueeze(0).to(device=device, dtype=torch.bfloat16)
         prompt = caption(row)
+        if args.dataset_dir is not None and not prompt:
+            raise ValueError(f"Episode dataset yielded an empty prompt for {path}")
 
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
             clean_latent = net.vae.encode(source, mode="argmax")
