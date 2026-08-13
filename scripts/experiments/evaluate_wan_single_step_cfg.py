@@ -40,6 +40,18 @@ def parse_args() -> argparse.Namespace:
             "all_final_selected_sixth_10k_f17_seed10.csv"
         ),
     )
+    parser.add_argument(
+        "--dataset-dir",
+        type=Path,
+        default=None,
+        help="Episode-tree dataset with paired <stem>.mp4 and <stem>_prompt.txt files.",
+    )
+    parser.add_argument(
+        "--exclude-dir-patterns",
+        nargs="*",
+        default=["badcase", "失败case", "from_realrobot", "test", ".claude"],
+        help="Case-insensitive path-component substrings excluded in dataset-dir mode.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--num-samples", type=int, default=16)
     parser.add_argument("--seed", type=int, default=20260813)
@@ -69,6 +81,53 @@ def read_rows(path: Path, count: int, seed: int) -> list[dict[str, str]]:
     rng = random.Random(seed)
     rng.shuffle(rows)
     return rows[:count]
+
+
+def scan_episode_rows(root: Path, exclude_patterns: list[str]) -> list[dict[str, str]]:
+    """Find simulation RGB videos and their sidecar prompts."""
+    patterns = [pattern.casefold() for pattern in exclude_patterns]
+    rows = []
+    for base, directories, files in os.walk(root):
+        relative = Path(base).relative_to(root)
+        excluded = any(
+            pattern in component.casefold()
+            for component in relative.parts
+            for pattern in patterns
+        )
+        if excluded:
+            directories[:] = []
+            continue
+        names = set(files)
+        for name in files:
+            if not name.endswith(".mp4") or name.endswith("_depth.mp4"):
+                continue
+            prompt_name = f"{name[:-4]}_prompt.txt"
+            if prompt_name not in names:
+                continue
+            video_path = Path(base) / name
+            prompt_path = Path(base) / prompt_name
+            prompt = prompt_path.read_text(encoding="utf-8", errors="replace").strip()
+            if prompt:
+                rows.append({"video_path": str(video_path), "caption": prompt})
+    return sorted(rows, key=lambda row: row["video_path"])
+
+
+def dataset_rows(
+    args: argparse.Namespace, rank: int, world_size: int
+) -> list[dict[str, str]]:
+    if args.dataset_dir is None:
+        return read_rows(args.index, args.num_samples, args.seed)
+
+    manifest = args.output_dir / "dataset_manifest.json"
+    if rank == 0:
+        rows = scan_episode_rows(args.dataset_dir, args.exclude_dir_patterns)
+        manifest.write_text(json.dumps(rows), encoding="utf-8")
+        print(f"Discovered {len(rows)} eligible episode/prompt pairs", flush=True)
+    if world_size > 1:
+        dist.barrier()
+    rows = json.loads(manifest.read_text(encoding="utf-8"))
+    random.Random(args.seed).shuffle(rows)
+    return rows[: args.num_samples]
 
 
 def caption(row: dict[str, str]) -> str:
@@ -228,7 +287,7 @@ def main() -> None:
 
     rank, world_size, device = init_distributed()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    rows = read_rows(args.index, args.num_samples, args.seed)
+    rows = dataset_rows(args, rank, world_size)
     indexed_rows = list(enumerate(rows))[rank::world_size]
     torch.manual_seed(args.seed + rank)
     random.seed(args.seed + rank)
