@@ -243,7 +243,9 @@ def main() -> None:
     records = []
     for sample_index, row in indexed_rows:
         path = row["video_path"]
-        frames = decode_video_segment(path, path, args.frames, output_format="torch")
+        # Read bytes for compatibility with both the legacy WebDataset decoder
+        # and the newer decoder that also accepts local paths.
+        frames = decode_video_segment(path, Path(path).read_bytes(), args.frames, output_format="torch")
         if frames is None or frames.shape[0] < args.frames:
             print(f"[rank {rank}] skipped undecodable sample {sample_index}: {path}", flush=True)
             continue
