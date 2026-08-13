@@ -82,7 +82,9 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, object]], int]:
     random.Random(args.seed).shuffle(pairs)
     rows = []
     for video_path, prompt_path in pairs:
-        prompt = prompt_path.read_text(encoding="utf-8", errors="replace").strip()
+        prompt = " ".join(
+            prompt_path.read_text(encoding="utf-8", errors="replace").split()
+        )
         if not prompt:
             continue
         metadata = inspect_video(video_path)
