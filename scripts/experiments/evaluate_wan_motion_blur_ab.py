@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-dir", type=Path, required=True)
     parser.add_argument("--treatment-dir", type=Path, required=True)
+    parser.add_argument("--reference-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--motion-quantile", type=float, default=0.8)
     parser.add_argument("--bootstrap-samples", type=int, default=10_000)
@@ -48,12 +49,8 @@ def laplacian(video_y: np.ndarray) -> np.ndarray:
     )
 
 
-def symmetric_motion_mask(
-    control_y: np.ndarray, treatment_y: np.ndarray, quantile: float
-) -> np.ndarray:
-    control_activity = np.abs(np.diff(control_y, axis=0)).mean(axis=0)
-    treatment_activity = np.abs(np.diff(treatment_y, axis=0)).mean(axis=0)
-    activity = np.maximum(control_activity, treatment_activity)
+def reference_motion_mask(reference_y: np.ndarray, quantile: float) -> np.ndarray:
+    activity = np.abs(np.diff(reference_y, axis=0)).mean(axis=0)
     threshold = np.quantile(activity, quantile)
     mask = activity >= threshold
     if not mask.any():
@@ -78,10 +75,13 @@ def metrics(video: np.ndarray, motion_mask: np.ndarray) -> dict[str, float]:
     }
 
 
-def paired_files(control_dir: Path, treatment_dir: Path) -> list[tuple[Path, Path]]:
+def paired_files(
+    control_dir: Path, treatment_dir: Path, reference_dir: Path
+) -> list[tuple[Path, Path, Path]]:
     control = {path.name: path for path in control_dir.glob("*.mp4")}
     treatment = {path.name: path for path in treatment_dir.glob("*.mp4")}
-    names = sorted(control.keys() & treatment.keys())
+    reference = {path.name: path for path in reference_dir.glob("*.mp4")}
+    names = sorted(control.keys() & treatment.keys() & reference.keys())
     if not names:
         raise FileNotFoundError("no same-name MP4 pairs found")
     missing_control = sorted(treatment.keys() - control.keys())
@@ -91,7 +91,7 @@ def paired_files(control_dir: Path, treatment_dir: Path) -> list[tuple[Path, Pat
             f"unpaired videos: control_missing={missing_control}, "
             f"treatment_missing={missing_treatment}"
         )
-    return [(control[name], treatment[name]) for name in names]
+    return [(control[name], treatment[name], reference[name]) for name in names]
 
 
 def bootstrap_interval(values: np.ndarray, samples: int, rng: np.random.Generator):
@@ -107,19 +107,23 @@ def main() -> None:
         raise ValueError("motion_quantile must be between zero and one")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
-    for control_path, treatment_path in paired_files(
-        args.control_dir, args.treatment_dir
+    for control_path, treatment_path, reference_path in paired_files(
+        args.control_dir, args.treatment_dir, args.reference_dir
     ):
         control = load_video(control_path)
         treatment = load_video(treatment_path)
+        reference = load_video(reference_path)
         if control.shape != treatment.shape:
             raise ValueError(
                 f"shape mismatch for {control_path.name}: "
                 f"{control.shape} vs {treatment.shape}"
             )
-        mask = symmetric_motion_mask(
-            luminance(control), luminance(treatment), args.motion_quantile
-        )
+        if reference.shape != control.shape:
+            raise ValueError(
+                f"reference shape mismatch for {control_path.name}: "
+                f"{reference.shape} vs {control.shape}"
+            )
+        mask = reference_motion_mask(luminance(reference), args.motion_quantile)
         rows.append(
             {
                 "name": control_path.name,
@@ -150,8 +154,8 @@ def main() -> None:
     result = {
         "num_pairs": len(rows),
         "motion_mask_definition": (
-            "top temporal-activity pixels from the symmetric max of control "
-            "and treatment; identical mask for both arms"
+            "top temporal-activity pixels from the clean demo5 reference video; "
+            "identical mask for both arms"
         ),
         "motion_quantile": args.motion_quantile,
         "summary": summary,

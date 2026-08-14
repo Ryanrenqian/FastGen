@@ -2,22 +2,17 @@ import numpy as np
 
 from scripts.experiments.evaluate_wan_motion_blur_ab import (
     metrics,
-    symmetric_motion_mask,
+    reference_motion_mask,
 )
 
 
-def test_symmetric_motion_mask_is_arm_order_invariant():
-    control = np.zeros((3, 4, 4), dtype=np.float32)
-    treatment = np.zeros_like(control)
-    control[1:, 0, 0] = 1.0
-    treatment[1:, 3, 3] = 1.0
+def test_reference_motion_mask_selects_reference_activity():
+    reference = np.zeros((3, 4, 4), dtype=np.float32)
+    reference[1:, 0, 0] = 1.0
 
-    mask_ab = symmetric_motion_mask(control, treatment, 0.8)
-    mask_ba = symmetric_motion_mask(treatment, control, 0.8)
+    mask = reference_motion_mask(reference, 0.8)
 
-    assert np.array_equal(mask_ab, mask_ba)
-    assert mask_ab[0, 0]
-    assert mask_ab[3, 3]
+    assert mask[0, 0]
 
 
 def test_metrics_separate_motion_amplitude_from_spatial_sharpness():
