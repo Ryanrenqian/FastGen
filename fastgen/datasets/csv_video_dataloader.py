@@ -33,8 +33,10 @@ class CSVVideoDataset(IterableDataset):
         dataset_size: int | None = None,
         positive_frame_strides: Sequence[int] = (1,),
         positive_random_walk_count: int = 0,
+        positive_stride1_repeat_count: int = 0,
         positive_random_step_min: int = 1,
         positive_random_step_max: int = 3,
+        positive_decode_step_max: int | None = None,
     ):
         super().__init__()
         if not os.path.isfile(index_path):
@@ -59,24 +61,35 @@ class CSVVideoDataset(IterableDataset):
         if self.positive_frame_strides[0] != 1:
             raise ValueError("positive_frame_strides must start with 1 for I2V conditioning")
         self.positive_random_walk_count = int(positive_random_walk_count)
+        self.positive_stride1_repeat_count = int(positive_stride1_repeat_count)
         self.positive_random_step_min = int(positive_random_step_min)
         self.positive_random_step_max = int(positive_random_step_max)
         if self.positive_random_walk_count < 0:
             raise ValueError("positive_random_walk_count must be non-negative")
+        if self.positive_stride1_repeat_count < 0:
+            raise ValueError("positive_stride1_repeat_count must be non-negative")
         if not (
             1
             <= self.positive_random_step_min
             <= self.positive_random_step_max
         ):
             raise ValueError("positive random steps must be positive and ordered")
+        required_step_max = max(
+            max(self.positive_frame_strides),
+            self.positive_random_step_max if self.positive_random_walk_count else 1,
+        )
+        self.positive_decode_step_max = (
+            required_step_max
+            if positive_decode_step_max is None
+            else int(positive_decode_step_max)
+        )
+        if self.positive_decode_step_max < required_step_max:
+            raise ValueError(
+                "positive_decode_step_max must cover every positive trajectory"
+            )
         self.decode_length = (
             (self.sequence_length - 1)
-            * max(
-                max(self.positive_frame_strides),
-                self.positive_random_step_max
-                if self.positive_random_walk_count
-                else 1,
-            )
+            * self.positive_decode_step_max
             + 1
         )
 
@@ -138,6 +151,9 @@ class CSVVideoDataset(IterableDataset):
             full_video[:, ::stride][:, : self.sequence_length]
             for stride in self.positive_frame_strides
         ]
+        positive_clips.extend(
+            positive_clips[0] for _ in range(self.positive_stride1_repeat_count)
+        )
         if self.positive_random_walk_count:
             if rng is None:
                 raise ValueError("random positive trajectories require a seeded RNG")

@@ -162,3 +162,33 @@ def test_balanced_four_by_four_nopool_experiment_recipe():
         config.model.static_negative_guidance_scale - 1.0
     ) * (config.model.generated_samples_per_condition - 1)
     assert static_weight == pytest.approx(1.0)
+
+
+def test_hyp21_configs_only_change_positive_trajectory_correspondence():
+    from fastgen.configs.experiments.WanI2V.config_tfd_wan22_5b_demo5_nopool_ab_control import (
+        create_config as create_control,
+    )
+    from fastgen.configs.experiments.WanI2V.config_tfd_wan22_5b_demo5_nopool_ab_treatment import (
+        create_config as create_treatment,
+    )
+
+    control, treatment = create_control(), create_treatment()
+    assert control.dataloader_train.index_path == treatment.dataloader_train.index_path
+    assert control.dataloader_train.dataset_size == treatment.dataloader_train.dataset_size
+    assert control.dataloader_train.positive_frame_strides == [1]
+    assert treatment.dataloader_train.positive_frame_strides == [1]
+    assert control.dataloader_train.positive_random_walk_count == 3
+    assert treatment.dataloader_train.positive_random_walk_count == 0
+    assert control.dataloader_train.positive_stride1_repeat_count == 0
+    assert treatment.dataloader_train.positive_stride1_repeat_count == 3
+    assert control.dataloader_train.positive_decode_step_max == 3
+    assert treatment.dataloader_train.positive_decode_step_max == 3
+    assert control.model.generated_samples_per_condition == 4
+    assert treatment.model.generated_samples_per_condition == 4
+    assert control.model.positive_samples_per_condition == 4
+    assert treatment.model.positive_samples_per_condition == 4
+    assert control.model.anchor_samples_per_condition == 4
+    assert treatment.model.anchor_samples_per_condition == 4
+    assert control.model.feature_pool_size == treatment.model.feature_pool_size == 1
+    assert control.trainer.seed == treatment.trainer.seed == 10
+    assert control.trainer.max_iter == treatment.trainer.max_iter == 2_001
