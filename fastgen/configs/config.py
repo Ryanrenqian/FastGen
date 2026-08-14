@@ -36,6 +36,9 @@ class LogConfig:
     wandb_mode: str = "online"
     # Wandb credential path
     wandb_credential: str = "./credentials/wandb_api.txt"
+    # Optional netrc containing the api.wandb.ai credential. This is preferred
+    # on shared training nodes because the secret never enters config.yaml.
+    wandb_netrc: str = ""
 
     # save path
     @property
@@ -57,10 +60,6 @@ class EvalConfig:
     max_ckpt: int = 100000000
     # Directory to save samples
     samples_dir: str = "samples"
-    # Remove generated samples after metrics have been written
-    cleanup_samples: bool = True
-    # Optional non-standard reference statistics path
-    fid_ref_path: Optional[str] = None
 
 
 @attrs.define(slots=False)

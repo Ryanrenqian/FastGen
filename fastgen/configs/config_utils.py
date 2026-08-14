@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from pathlib import Path
+import sys
 from typing import Any, Optional, List, Dict
 import inspect
 from copy import deepcopy
@@ -13,6 +15,8 @@ from hydra import compose, initialize
 from hydra.core.config_store import ConfigStore
 
 import importlib
+import importlib.util
+import hashlib
 from dataclasses import fields as dataclass_fields
 import attr
 from dataclasses import is_dataclass
@@ -36,15 +40,39 @@ def import_config_from_python_file(config_file: str) -> Any:
     if not os.path.isfile(config_file):
         raise FileNotFoundError(f"FastGen config file ({config_file}) not found.")
 
-    # Convert to importable module format.
-    config_module = config_file.replace("/", ".").replace(".py", "")
+    config_path = Path(config_file).resolve()
 
-    # Import the module
+    # Prefer a package import when the config is below an active sys.path root.
+    # This supports both repo-relative and absolute paths while preserving any
+    # package-relative imports used by the config.
+    config_module = None
+    for search_root in sys.path:
+        try:
+            relative_path = config_path.relative_to(Path(search_root or os.getcwd()).resolve())
+        except ValueError:
+            continue
+        module_parts = relative_path.with_suffix("").parts
+        if module_parts and all(part.isidentifier() for part in module_parts):
+            config_module = ".".join(module_parts)
+            break
+
     try:
-        config = importlib.import_module(config_module)
-    except ImportError as e:
+        if config_module is not None:
+            config = importlib.import_module(config_module)
+        else:
+            # Configs outside an importable package are still valid Python
+            # files. Give them a deterministic private module name.
+            digest = hashlib.sha256(str(config_path).encode()).hexdigest()[:16]
+            module_name = f"_fastgen_config_{digest}"
+            spec = importlib.util.spec_from_file_location(module_name, config_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not create an import spec for {config_path}")
+            config = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = config
+            spec.loader.exec_module(config)
+    except (ImportError, OSError) as e:
         logger.error(f"Failed to import config from python file: {e}")
-        raise e
+        raise
 
     return config.create_config()
 

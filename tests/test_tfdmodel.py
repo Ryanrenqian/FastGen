@@ -5,6 +5,9 @@ import math
 
 import torch
 
+from fastgen.configs.methods.config_tfd import ModelConfig
+from fastgen.methods import TFDModel
+
 from fastgen.methods.distribution_matching.teacher_feature_drifting import (
     anchor_margin_loss,
     resolve_edm_feature_selectors,
@@ -12,6 +15,13 @@ from fastgen.methods.distribution_matching.teacher_feature_drifting import (
 )
 from fastgen.configs.experiments.EDM.config_tfd_in64 import create_config
 from fastgen.networks.EDM.network import DhariwalUNet
+
+
+def test_fixed_feature_noise_sigma_bypasses_random_sampling():
+    model = object.__new__(TFDModel)
+    model.config = ModelConfig(feature_noise_sigma=0.1)
+    sigmas = model._sample_group_sigmas(8, torch.device("cpu"))
+    assert torch.equal(sigmas, torch.full((8,), 0.1))
 
 
 def test_teacher_feature_drifting_loss_has_generator_gradient():
@@ -22,6 +32,20 @@ def test_teacher_feature_drifting_loss_has_generator_gradient():
     assert generated.grad is not None
     assert torch.isfinite(generated.grad).all()
     assert metrics["drift_norm"].ndim == 0
+
+
+def test_teacher_feature_drifting_supports_weighted_static_negative():
+    generated = torch.randn(2, 4, 8, requires_grad=True)
+    positive = torch.randn(2, 1, 8)
+    static = torch.randn(2, 1, 8)
+    base_loss, _ = teacher_feature_drifting_loss(generated, positive, [0.05])
+    weighted_loss, _ = teacher_feature_drifting_loss(
+        generated, positive, [0.05], fixed_negative=static, negative_weight=15.0
+    )
+    assert not torch.allclose(base_loss, weighted_loss)
+    weighted_loss.mean().backward()
+    assert generated.grad is not None
+    assert torch.isfinite(generated.grad).all()
 
 
 def test_teacher_feature_drifting_matches_official_equations():

@@ -105,7 +105,11 @@ def block_forward(
     encoder_hidden_states: torch.Tensor,
     rotary_emb: torch.Tensor,
     norm_temb: bool,
+    feature_tap: str = "block_output",
+    return_feature: bool = False,
 ):
+    if feature_tap not in {"block_output", "post_self_attn", "self_attn_delta"}:
+        raise ValueError(f"Unsupported Wan feature tap: {feature_tap}")
     if temb.ndim == 4:
         # temb: batch_size, seq_len, 6, inner_dim (wan2.2 ti2v)
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
@@ -133,7 +137,9 @@ def block_forward(
     # 1. Self-attention
     norm_hidden_states = (self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa).type_as(hidden_states)
     attn_output = self.attn1(hidden_states=norm_hidden_states, rotary_emb=rotary_emb)
-    hidden_states = (hidden_states.float() + attn_output * gate_msa).type_as(hidden_states)
+    self_attn_delta = (attn_output * gate_msa).type_as(hidden_states)
+    hidden_states = (hidden_states.float() + self_attn_delta).type_as(hidden_states)
+    post_self_attn = hidden_states
 
     # 2. Cross-attention
     norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
@@ -145,7 +151,14 @@ def block_forward(
     ff_output = self.ffn(norm_hidden_states)
     hidden_states = (hidden_states.float() + ff_output.float() * c_gate_msa).type_as(hidden_states)
 
-    return hidden_states
+    if not return_feature:
+        return hidden_states
+    feature = {
+        "block_output": hidden_states,
+        "post_self_attn": post_self_attn,
+        "self_attn_delta": self_attn_delta,
+    }[feature_tap]
+    return hidden_states, feature
 
 
 def classify_forward(
@@ -158,6 +171,8 @@ def classify_forward(
     attention_kwargs: Optional[Dict[str, Any]] = None,
     return_features_early: Optional[bool] = False,
     feature_indices: Optional[Set[int]] = None,
+    feature_tap: str = "block_output",
+    feature_taps: Optional[Dict[int, str]] = None,
     return_logvar: Optional[bool] = False,
     skip_layers: Optional[List[int]] = None,
     **kwargs,
@@ -211,6 +226,8 @@ def classify_forward(
         return_features_early,
         lora_scale,
         attention_kwargs,
+        feature_tap,
+        feature_taps,
     )
 
     # If we have all the features, we can exit early
@@ -378,6 +395,8 @@ def classify_forward_block_forward(
     return_features_early: Optional[bool] = False,
     lora_scale: Optional[float] = 1.0,
     attention_kwargs: Optional[Dict[str, Any]] = None,
+    feature_tap: str = "block_output",
+    feature_taps: Optional[Dict[int, str]] = None,
 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
     """
     block forward pass inside the classify_forward function.
@@ -404,14 +423,47 @@ def classify_forward_block_forward(
             continue
         if self.encoder_depth is not None and idx == self.encoder_depth and r_timestep_proj is not None:
             timestep_proj = r_timestep_proj
+        extract_feature = feature_indices is not None and idx in feature_indices
+        block_feature_tap = (
+            feature_taps.get(idx, feature_tap) if feature_taps else feature_tap
+        )
         if torch.is_grad_enabled() and self.gradient_checkpointing:
-            hidden_states = self._gradient_checkpointing_func(
-                block, hidden_states, timestep_proj, encoder_hidden_states, rotary_emb, self.norm_temb
-            )
+            if extract_feature:
+                def checkpointed_block(
+                    *inputs, block=block, feature_tap=block_feature_tap
+                ):
+                    return block(
+                        *inputs, feature_tap=feature_tap, return_feature=True
+                    )
+
+                hidden_states, feature = self._gradient_checkpointing_func(
+                    checkpointed_block,
+                    hidden_states,
+                    timestep_proj,
+                    encoder_hidden_states,
+                    rotary_emb,
+                    self.norm_temb,
+                )
+            else:
+                hidden_states = self._gradient_checkpointing_func(
+                    block, hidden_states, timestep_proj, encoder_hidden_states, rotary_emb, self.norm_temb
+                )
         else:
-            hidden_states = block(hidden_states, timestep_proj, encoder_hidden_states, rotary_emb, self.norm_temb)
-        if feature_indices is not None and idx in feature_indices:
-            features.append(hidden_states)
+            block_output = block(
+                hidden_states,
+                timestep_proj,
+                encoder_hidden_states,
+                rotary_emb,
+                self.norm_temb,
+                feature_tap=block_feature_tap,
+                return_feature=extract_feature,
+            )
+            if extract_feature:
+                hidden_states, feature = block_output
+            else:
+                hidden_states = block_output
+        if extract_feature:
+            features.append(feature)
 
         # If we have all the features, we can exit early
         if return_features_early and len(features) == len(feature_indices):
@@ -630,7 +682,12 @@ class Wan(FastGenNetwork):
     def unipc_scheduler(self) -> UniPCMultistepScheduler:
         """Lazily initialize the scheduler."""
         if self._unipc_scheduler is None:
-            self._unipc_scheduler = UniPCMultistepScheduler.from_pretrained(self.model_id, subfolder="scheduler")
+            self._unipc_scheduler = UniPCMultistepScheduler.from_pretrained(
+                self.model_id,
+                cache_dir=os.environ["HF_HOME"],
+                subfolder="scheduler",
+                local_files_only=str2bool(os.getenv("LOCAL_FILES_ONLY", "false")),
+            )
         return self._unipc_scheduler
 
     def _initialize_network(self, model_id_or_local_path: str, load_pretrained: bool) -> Tuple[str, int]:
@@ -1078,6 +1135,8 @@ class Wan(FastGenNetwork):
         r: Optional[torch.Tensor] = None,
         return_features_early: bool = False,
         feature_indices: Optional[Set[int]] = None,
+        feature_tap: str = "block_output",
+        feature_taps: Optional[Dict[int, str]] = None,
         return_logvar: bool = False,
         fwd_pred_type: Optional[str] = None,
         skip_layers: Optional[List[int]] = None,
@@ -1129,6 +1188,8 @@ class Wan(FastGenNetwork):
             attention_kwargs=None,
             return_features_early=return_features_early,
             feature_indices=feature_indices,
+            feature_tap=feature_tap,
+            feature_taps=feature_taps,
             return_logvar=return_logvar,
             skip_layers=skip_layers,
         )

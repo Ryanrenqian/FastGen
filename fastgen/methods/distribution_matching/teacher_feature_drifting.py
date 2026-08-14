@@ -72,12 +72,19 @@ def teacher_feature_drifting_loss(
     generated: torch.Tensor,
     positive: torch.Tensor,
     radii: Sequence[float],
+    fixed_negative: torch.Tensor | None = None,
+    negative_weight: torch.Tensor | float | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Official mini-batch TFD objective from ``tfd/losses/drifting.py``."""
     if generated.ndim != 3 or positive.ndim != 3:
         raise ValueError("generated and positive features must have shape [B, N, D]")
     if generated.shape[0] != positive.shape[0] or generated.shape[2] != positive.shape[2]:
         raise ValueError("generated and positive feature shapes are incompatible")
+    if fixed_negative is not None:
+        if fixed_negative.ndim != 3:
+            raise ValueError("fixed_negative features must have shape [B, N, D]")
+        if fixed_negative.shape[0] != generated.shape[0] or fixed_negative.shape[2] != generated.shape[2]:
+            raise ValueError("fixed_negative and generated feature shapes are incompatible")
     if generated.shape[1] < 2:
         raise ValueError("TFD requires at least two generated samples per condition")
     if not radii or any(radius <= 0 for radius in radii):
@@ -86,20 +93,42 @@ def teacher_feature_drifting_loss(
     generated = generated.float()
     positive = positive.float()
     frozen_generated = generated.detach()
-    targets = torch.cat([frozen_generated, positive], dim=1)
+    if fixed_negative is None:
+        fixed_negative = frozen_generated[:, :0]
+    else:
+        fixed_negative = fixed_negative.detach().float()
+    if negative_weight is None:
+        fixed_negative_weight = generated.new_ones(fixed_negative.shape[:2])
+    else:
+        fixed_negative_weight = torch.as_tensor(negative_weight, device=generated.device, dtype=torch.float32)
+        if fixed_negative_weight.ndim == 0:
+            fixed_negative_weight = fixed_negative_weight.expand(fixed_negative.shape[:2])
+        elif fixed_negative_weight.shape != fixed_negative.shape[:2]:
+            raise ValueError("negative_weight must be scalar or have shape [B, N]")
+    targets = torch.cat([frozen_generated, fixed_negative, positive], dim=1)
+    target_weights = torch.cat(
+        [
+            generated.new_ones(frozen_generated.shape[:2]),
+            fixed_negative_weight,
+            generated.new_ones(positive.shape[:2]),
+        ],
+        dim=1,
+    )
     num_generated = generated.shape[1]
+    num_fixed_negative = fixed_negative.shape[1]
     feature_dim = generated.shape[2]
 
     with torch.no_grad():
         distance = torch.sqrt(torch.clamp(torch.cdist(frozen_generated, targets).pow(2), min=1e-8))
-        scale = distance.mean()
+        weighted_distance = distance * target_weights[:, None, :]
+        scale = weighted_distance.mean() / target_weights.mean()
         input_scale = torch.clamp(scale / math.sqrt(float(feature_dim)), min=1e-3)
         generated_scaled = frozen_generated / input_scale
         targets_scaled = targets / input_scale
         normalized_distance = distance / torch.clamp(scale, min=1e-3)
         diagonal = F.pad(
             torch.eye(num_generated, device=generated.device, dtype=generated.dtype).unsqueeze(0),
-            (0, positive.shape[1]),
+            (0, num_fixed_negative + positive.shape[1]),
         )
         normalized_distance = normalized_distance + diagonal * 1e6
 
@@ -110,8 +139,10 @@ def teacher_feature_drifting_loss(
             affinity = torch.softmax(logits, dim=-1)
             reverse_affinity = torch.softmax(logits, dim=-2)
             affinity = torch.sqrt(torch.clamp(affinity * reverse_affinity, min=1e-6))
-            negative_affinity = affinity[:, :, :num_generated]
-            positive_affinity = affinity[:, :, num_generated:]
+            affinity = affinity * target_weights[:, None, :]
+            negative_end = num_generated + num_fixed_negative
+            negative_affinity = affinity[:, :, :negative_end]
+            positive_affinity = affinity[:, :, negative_end:]
             coefficients = torch.cat(
                 [
                     -negative_affinity * positive_affinity.sum(dim=-1, keepdim=True),
@@ -169,6 +200,11 @@ class TFDModel(FastGenModel):
             raise ValueError("Use feature_layers or feature_indices, not both")
         if self.config.feature_noise_sigma_min <= 0:
             raise ValueError("feature_noise_sigma_min must be positive")
+        if (
+            self.config.feature_noise_sigma is not None
+            and self.config.feature_noise_sigma <= 0
+        ):
+            raise ValueError("feature_noise_sigma must be positive when set")
         if self.config.feature_noise_sigma_max < self.config.feature_noise_sigma_min:
             raise ValueError("feature noise sigma bounds are invalid")
         super().build_model()
@@ -182,6 +218,13 @@ class TFDModel(FastGenModel):
 
     def _sample_group_sigmas(self, batch_size: int, device: torch.device) -> torch.Tensor:
         cfg = self.config
+        if cfg.feature_noise_sigma is not None:
+            return torch.full(
+                (batch_size,),
+                float(cfg.feature_noise_sigma),
+                device=device,
+                dtype=torch.float32,
+            )
         sigmas = (
             torch.randn(batch_size, device=device) * cfg.feature_noise_p_std + cfg.feature_noise_p_mean
         ).exp()

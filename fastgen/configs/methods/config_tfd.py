@@ -22,10 +22,16 @@ class ModelConfig(BaseModelConfig):
         factory=lambda: ["enc:6", "enc:11", "bottleneck", "dec:7", "dec:12"]
     )
     feature_indices: list[int] = attrs.field(factory=list)
+    feature_tap: str = "block_output"
+    feature_taps: list[str] = attrs.field(factory=list)
+    feature_loss_weights: list[float] = attrs.field(factory=list)
     feature_pool_size: int = 4
+    feature_mask_first_temporal_slot: bool = False
+    feature_shared_noise_per_condition: bool = False
     drift_radii: list[float] = attrs.field(factory=lambda: [0.02, 0.05, 0.1, 0.2])
     feature_noise_p_mean: float = -1.2
     feature_noise_p_std: float = 1.2
+    feature_noise_sigma: float | None = None
     feature_noise_sigma_min: float = 0.02
     feature_noise_sigma_max: float = 0.1
     feature_noise_trunc_resamples: int = 8
@@ -40,6 +46,8 @@ class ModelConfig(BaseModelConfig):
     teacher_positive_guidance_scale: float = 6.0
     teacher_positive_batch_size: int = 1
     teacher_positive_sample_kwargs: dict = attrs.field(factory=dict)
+    static_negative_enabled: bool = False
+    static_negative_guidance_scale: float = 1.0
 
     anchor_weight: float = 1.0
     anchor_temperature: float = 1.0

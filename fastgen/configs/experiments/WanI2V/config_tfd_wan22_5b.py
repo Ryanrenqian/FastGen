@@ -21,10 +21,7 @@ def create_config():
     config.model.feature_layers = []
     config.model.feature_indices = [9, 19, 29]
     config.model.feature_pool_size = 4
-    config.model.feature_noise_p_mean = -2.3
-    config.model.feature_noise_p_std = 0.35
-    config.model.feature_noise_sigma_min = 0.05
-    config.model.feature_noise_sigma_max = 0.15
+    config.model.feature_noise_sigma = 0.1
     config.model.generated_samples_per_condition = 4
     config.model.positive_samples_per_condition = 4
     config.model.anchor_samples_per_condition = 4
@@ -36,6 +33,8 @@ def create_config():
         "shift": 3.0,
         "show_progress": False,
     }
+    config.model.static_negative_enabled = True
+    config.model.static_negative_guidance_scale = 6.0
     config.model.anchor_weight = 1.0
     config.model.net_optimizer.optim_type = "adamw"
     config.model.net_optimizer.lr = 1e-6
@@ -60,4 +59,8 @@ def create_config():
     config.trainer.max_iter = 21
     config.trainer.callbacks.grad_clip.grad_norm = 1.0
     config.log_config.group = "wan22_5b_ti2v_tfd"
+    config.log_config.wandb_mode = "online"
+    config.log_config.wandb_netrc = (
+        "/mnt/home/renqian/oneNFE/FastGen-tfd/.secrets/wandb.netrc"
+    )
     return config

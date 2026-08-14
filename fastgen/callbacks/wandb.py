@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 import os
+import netrc
 from dataclasses import dataclass, field
 import time
 from typing import Optional, Dict, Callable, TYPE_CHECKING
@@ -88,9 +89,22 @@ def to_wandb(
 
 @rank0_only
 def init_wandb(config: BaseConfig):
+    wandb_netrc = config.log_config.wandb_netrc
+    if wandb_netrc and config.log_config.wandb_mode == "online":
+        if not os.path.isfile(wandb_netrc):
+            raise FileNotFoundError(f"Configured W&B netrc does not exist: {wandb_netrc}")
+        try:
+            credentials = netrc.netrc(wandb_netrc).authenticators("api.wandb.ai")
+        except (OSError, netrc.NetrcParseError) as error:
+            raise RuntimeError(f"Invalid W&B netrc {wandb_netrc}: {error}") from error
+        if not credentials or not credentials[2]:
+            raise RuntimeError(f"W&B netrc has no api.wandb.ai credential: {wandb_netrc}")
+        os.environ["NETRC"] = wandb_netrc
+        logger.info(f"Using W&B credentials from NETRC={wandb_netrc}")
+
     # wandb login
     wandb_credential = config.log_config.wandb_credential
-    if os.path.isfile(wandb_credential):
+    if not wandb_netrc and os.path.isfile(wandb_credential):
         with open(wandb_credential, encoding="utf-8") as f:
             os.environ["WANDB_API_KEY"] = f.read().strip("\n")
         logger.info(f"Loading WANDB_API_KEY from {wandb_credential}")
