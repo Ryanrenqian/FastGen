@@ -105,6 +105,95 @@ def _dinov3_video_tokens(
     )
 
 
+def _compare_temporal_sample_force(
+    generated: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor | None,
+    sample_force: torch.Tensor,
+    sample_metrics: dict[str, torch.Tensor],
+    *,
+    batch: int,
+    candidates: int,
+    frames: int,
+    negative_weight: float,
+    radii: list[float],
+) -> dict[str, torch.Tensor]:
+    """Compare DriftWorld forces after swapping candidate and temporal axes.
+
+    The regular field treats candidates as samples independently at every frame.
+    The temporal field treats frames as samples independently for every candidate.
+    Both returned forces are reshaped to ``[B, N, F, S, D]`` before comparison.
+    """
+    groups, actual_candidates, feature_dim = generated.shape
+    if actual_candidates != candidates or groups % (batch * frames):
+        raise ValueError("generated groups do not match batch/candidate/frame layout")
+    spatial = groups // (batch * frames)
+
+    generated_layout = generated.reshape(
+        batch, frames, spatial, candidates, feature_dim
+    )
+    temporal_generated = (
+        generated_layout.permute(0, 3, 2, 1, 4)
+        .reshape(batch * candidates * spatial, frames, feature_dim)
+    )
+
+    def temporal_targets(tokens: torch.Tensor | None) -> torch.Tensor | None:
+        if tokens is None:
+            return None
+        samples = tokens.shape[1]
+        target_layout = tokens.reshape(
+            batch, frames, spatial, samples, feature_dim
+        )
+        return (
+            target_layout.permute(0, 2, 1, 3, 4)
+            .reshape(batch, 1, spatial, frames * samples, feature_dim)
+            .expand(-1, candidates, -1, -1, -1)
+            .reshape(batch * candidates * spatial, frames * samples, feature_dim)
+        )
+
+    _, temporal_metrics, temporal_force = drifting_loss(
+        temporal_generated,
+        temporal_targets(positive),
+        negative=temporal_targets(negative),
+        negative_weight=negative_weight,
+        radii=radii,
+        return_force=True,
+    )
+
+    sample_aligned = (
+        sample_force.reshape(batch, frames, spatial, candidates, feature_dim)
+        .permute(0, 3, 1, 2, 4)
+    )
+    temporal_aligned = (
+        temporal_force.reshape(batch, candidates, spatial, frames, feature_dim)
+        .permute(0, 1, 3, 2, 4)
+    )
+    sample_norm = sample_aligned.square().sum(dim=-1).sqrt()
+    temporal_norm = temporal_aligned.square().sum(dim=-1).sqrt()
+    cosine = torch.nn.functional.cosine_similarity(
+        sample_aligned, temporal_aligned, dim=-1, eps=1e-8
+    )
+    ratio = temporal_norm / sample_norm.clamp_min(1e-8)
+    metrics = {
+        "sample_force_norm": sample_norm.mean(),
+        "temporal_force_norm": temporal_norm.mean(),
+        "temporal_over_sample_force": ratio.mean(),
+        "force_cosine": cosine.mean(),
+        "sample_radius_force_rms": sample_metrics["radius_force_rms"],
+        "temporal_radius_force_rms": temporal_metrics["radius_force_rms"],
+        "temporal_over_sample_radius_force_rms": (
+            temporal_metrics["radius_force_rms"]
+            / sample_metrics["radius_force_rms"].clamp_min(1e-8)
+        ),
+    }
+    for frame in range(frames):
+        metrics[f"frame_{frame + 1}_force_cosine"] = cosine[:, :, frame].mean()
+        metrics[f"frame_{frame + 1}_temporal_over_sample_force"] = (
+            ratio[:, :, frame].mean()
+        )
+    return {key: value.detach() for key, value in metrics.items()}
+
+
 class DriftWorldModel(FastGenModel):
     """Train a one-step TI2V generator with a latent-space drifting field."""
 
@@ -321,31 +410,57 @@ class DriftWorldModel(FastGenModel):
         total_weight = 0.0
         metrics = {}
         for field_name, field_weight, generated_tokens, positive_tokens, negative_tokens in fields:
-            field_loss, field_metrics = drifting_loss(
+            field_result = drifting_loss(
                 generated_tokens,
                 positive_tokens,
                 negative=negative_tokens,
                 negative_weight=self.config.static_negative_weight,
                 radii=self.config.drift_radii,
+                return_force=(
+                    self.config.compare_temporal_sample_force
+                    and field_name == "local"
+                ),
             )
+            field_loss, field_metrics = field_result[:2]
             weighted_loss = weighted_loss + field_weight * field_loss
             total_weight += field_weight
             metrics[f"{field_name}_drifting_loss"] = field_loss.detach()
             metrics.update({f"{field_name}_{key}": value for key, value in field_metrics.items()})
+            if self.config.compare_temporal_sample_force and field_name == "local":
+                future_frames = generated.shape[3] - int(
+                    self.config.mask_conditioning_latent_slot
+                )
+                comparison = _compare_temporal_sample_force(
+                    generated_tokens,
+                    positive_tokens,
+                    negative_tokens,
+                    field_result[2],
+                    field_metrics,
+                    batch=batch,
+                    candidates=count,
+                    frames=future_frames,
+                    negative_weight=self.config.static_negative_weight,
+                    radii=self.config.drift_radii,
+                )
+                metrics.update(
+                    {f"force_compare_local_{key}": value for key, value in comparison.items()}
+                )
 
         if self.config.dinov3_drift_weight > 0:
             dinov3_losses = []
             for layer_name, generated_tokens, positive_tokens, negative_tokens, motion_weight in (
                 self._dinov3_drifting_fields(generated, positive)
             ):
-                layer_loss, layer_metrics = drifting_loss(
+                layer_result = drifting_loss(
                     generated_tokens,
                     positive_tokens,
                     negative=negative_tokens,
                     negative_weight=self.config.static_negative_weight,
                     group_weight=motion_weight,
                     radii=self.config.drift_radii,
+                    return_force=self.config.compare_temporal_sample_force,
                 )
+                layer_loss, layer_metrics = layer_result[:2]
                 dinov3_losses.append(layer_loss)
                 metrics[f"dinov3_{layer_name}_drifting_loss"] = layer_loss.detach()
                 metrics.update(
@@ -354,6 +469,25 @@ class DriftWorldModel(FastGenModel):
                         for key, value in layer_metrics.items()
                     }
                 )
+                if self.config.compare_temporal_sample_force:
+                    comparison = _compare_temporal_sample_force(
+                        generated_tokens,
+                        positive_tokens,
+                        negative_tokens,
+                        layer_result[2],
+                        layer_metrics,
+                        batch=batch,
+                        candidates=count,
+                        frames=generated.shape[3] - 1,
+                        negative_weight=self.config.static_negative_weight,
+                        radii=self.config.drift_radii,
+                    )
+                    metrics.update(
+                        {
+                            f"force_compare_dinov3_{layer_name}_{key}": value
+                            for key, value in comparison.items()
+                        }
+                    )
             dinov3_loss = torch.stack(dinov3_losses).mean()
             weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
             total_weight += self.config.dinov3_drift_weight

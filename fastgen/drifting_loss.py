@@ -29,7 +29,11 @@ def drifting_loss(
     negative_weight: float | torch.Tensor = 1.0,
     group_weight: torch.Tensor | None = None,
     radii: Sequence[float] = (0.02, 0.05),
-) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    return_force: bool = False,
+) -> (
+    tuple[torch.Tensor, Dict[str, torch.Tensor]]
+    | tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]
+):
     """Construct a normalized drifting field independently per token group.
 
     Args:
@@ -130,4 +134,7 @@ def drifting_loss(
         per_group_loss = per_group_loss * group_weight.to(
             device=generated.device, dtype=per_group_loss.dtype
         )
-    return per_group_loss.mean(), metrics
+    result = (per_group_loss.mean(), metrics)
+    if return_force:
+        return (*result, total_force.detach())
+    return result

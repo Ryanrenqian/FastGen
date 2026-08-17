@@ -131,6 +131,40 @@ def test_dinov3_video_tokens_keep_candidates_aligned():
     assert torch.equal(tokens[0, 2], original[0, 2, 0, 0])
 
 
+def test_temporal_sample_force_comparison_is_finite_and_frame_aligned():
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.methods.distribution_matching.driftworld import (
+        _compare_temporal_sample_force,
+    )
+
+    batch, frames, spatial, candidates, feature_dim = 2, 4, 3, 5, 7
+    generated = torch.randn(batch * frames * spatial, candidates, feature_dim)
+    positive = torch.randn(batch * frames * spatial, 1, feature_dim)
+    negative = torch.randn(batch * frames * spatial, 1, feature_dim)
+    _, sample_metrics, sample_force = drifting_loss(
+        generated, positive, negative=negative, radii=[0.05], return_force=True
+    )
+
+    metrics = _compare_temporal_sample_force(
+        generated,
+        positive,
+        negative,
+        sample_force,
+        sample_metrics,
+        batch=batch,
+        candidates=candidates,
+        frames=frames,
+        negative_weight=1.0,
+        radii=[0.05],
+    )
+
+    assert all(torch.isfinite(value) for value in metrics.values())
+    assert -1 <= metrics["force_cosine"] <= 1
+    assert metrics["temporal_over_sample_force"] > 0
+    assert all(f"frame_{index}_force_cosine" in metrics for index in range(1, 5))
+
+
 def test_repeat_condition_keeps_ti2v_candidates_aligned():
     if importlib.util.find_spec("omegaconf") is None:
         pytest.skip("FastGen framework dependencies are not installed")
