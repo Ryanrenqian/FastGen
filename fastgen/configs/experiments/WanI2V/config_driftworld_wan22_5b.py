@@ -23,14 +23,15 @@ def create_config():
     config.model.generated_samples_per_condition = 64
     config.model.drift_radii = [0.02, 0.05]
     config.model.mask_conditioning_latent_slot = True
-    # Match Bridge DriftWorld's n_neg=64. Weight 1 corresponds to CFG alpha=64/63.
+    # The preceding real frame is an extra fixed negative only in DINO space.
+    # Generated candidates remain mutually repulsive in every drift field.
     config.model.static_negative_weight = 1.0
     # Match Bridge DriftWorld's local latent and DINOv3 feature objectives.
     config.model.local_drift_weight = 1.0
     config.model.trajectory_drift_weight = 0.0
     config.model.trajectory_drift_block = (4, 2, 2)
-    # Three DINO blocks are averaged, so weight 3 gives each block the same
-    # effective objective weight as the latent field.
+    # Three DINO blocks are averaged, so weight 3 makes the summed objective
+    # VAE + DINO_2 + DINO_5 + DINO_8.
     config.model.dinov3_drift_weight = 3.0
     config.model.dinov3_repo_dir = (
         "/mnt/home/renqian/imgGen/runtime/MODEL/dinov3/repo"

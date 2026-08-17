@@ -326,10 +326,6 @@ class DriftWorldModel(FastGenModel):
             raise ValueError("positive must have shape [B, P, C, T, H, W]")
         return positive
 
-    @staticmethod
-    def _static_negative(real: torch.Tensor) -> torch.Tensor:
-        return real[:, :, :1].expand(-1, -1, real.shape[2], -1, -1).unsqueeze(1)
-
     def _get_outputs(
         self, gen_data: torch.Tensor, input_student: torch.Tensor, condition: Any = None
     ) -> Dict[str, torch.Tensor | Callable]:
@@ -364,7 +360,6 @@ class DriftWorldModel(FastGenModel):
         generated_flat = self.gen_data_from_net(input_student, timestep, condition=repeated_condition)
         generated = generated_flat.reshape(batch, count, *generated_flat.shape[1:])
 
-        static_negative = self._static_negative(real) if self.config.static_negative_weight > 0 else None
         fields = []
         if self.config.local_drift_weight > 0:
             fields.append(
@@ -373,11 +368,7 @@ class DriftWorldModel(FastGenModel):
                     self.config.local_drift_weight,
                     _video_tokens(generated, drop_first_frame=self.config.mask_conditioning_latent_slot),
                     _video_tokens(positive, drop_first_frame=self.config.mask_conditioning_latent_slot),
-                    None
-                    if static_negative is None
-                    else _video_tokens(
-                        static_negative, drop_first_frame=self.config.mask_conditioning_latent_slot
-                    ),
+                    None,
                 )
             )
         if self.config.trajectory_drift_weight > 0:
@@ -396,18 +387,11 @@ class DriftWorldModel(FastGenModel):
                         block_shape=block_shape,
                         drop_first_frame=self.config.mask_conditioning_latent_slot,
                     ),
-                    None
-                    if static_negative is None
-                    else _video_block_tokens(
-                        static_negative,
-                        block_shape=block_shape,
-                        drop_first_frame=self.config.mask_conditioning_latent_slot,
-                    ),
+                    None,
                 )
             )
 
         weighted_loss = generated.new_zeros((), dtype=torch.float32)
-        total_weight = 0.0
         metrics = {}
         weighted_components = {}
         for field_name, field_weight, generated_tokens, positive_tokens, negative_tokens in fields:
@@ -424,7 +408,6 @@ class DriftWorldModel(FastGenModel):
             )
             field_loss, field_metrics = field_result[:2]
             weighted_loss = weighted_loss + field_weight * field_loss
-            total_weight += field_weight
             weighted_components[field_name] = field_weight * field_loss
             metrics[f"{field_name}_drifting_loss"] = field_loss.detach()
             metrics.update({f"{field_name}_{key}": value for key, value in field_metrics.items()})
@@ -492,20 +475,19 @@ class DriftWorldModel(FastGenModel):
                     )
             dinov3_loss = torch.stack(dinov3_losses).mean()
             weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
-            total_weight += self.config.dinov3_drift_weight
             weighted_components["dinov3"] = self.config.dinov3_drift_weight * dinov3_loss
             metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
-        loss = weighted_loss / total_weight
+        # Bridge DriftWorld sums feature-field losses. With three averaged DINO
+        # blocks at weight 3 this is VAE + DINO_2 + DINO_5 + DINO_8.
+        loss = weighted_loss
         for component_name, component_loss in weighted_components.items():
-            metrics[f"{component_name}_weighted_loss"] = (
-                component_loss / total_weight
-            ).detach()
+            metrics[f"{component_name}_weighted_loss"] = component_loss.detach()
 
         # Log unambiguous VAE/DINO names, configured weights, weighted
         # contributions, and their balance in the actual optimized objective.
         if "local" in weighted_components:
             vae_raw = metrics["local_drifting_loss"]
-            vae_weighted = weighted_components["local"] / total_weight
+            vae_weighted = weighted_components["local"]
             metrics["vae_drifting_loss"] = vae_raw
             metrics["vae_drift_weight"] = vae_raw.new_tensor(
                 self.config.local_drift_weight
@@ -516,7 +498,7 @@ class DriftWorldModel(FastGenModel):
             metrics["latent_weighted_loss"] = vae_weighted.detach()
         if "dinov3" in weighted_components:
             dino_raw = metrics["dinov3_drifting_loss"]
-            dino_weighted = weighted_components["dinov3"] / total_weight
+            dino_weighted = weighted_components["dinov3"]
             metrics["dino_drifting_loss"] = dino_raw
             metrics["dino_drift_weight"] = dino_raw.new_tensor(
                 self.config.dinov3_drift_weight

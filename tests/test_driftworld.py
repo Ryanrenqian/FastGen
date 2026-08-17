@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -88,6 +89,78 @@ def test_drifting_loss_matches_driftworld_reference_equations():
 
     # Regression value produced by driftworld/drifting/drift_loss_indep.py.
     assert torch.allclose(loss, torch.tensor(3.8144168853759766), rtol=1e-5, atol=1e-6)
+
+
+def test_bridge_field_objective_is_direct_sum():
+    vae_loss = torch.tensor(2.0)
+    dino_block_losses = torch.tensor([3.0, 5.0, 7.0])
+
+    objective = vae_loss + 3.0 * dino_block_losses.mean()
+
+    assert objective == vae_loss + dino_block_losses.sum()
+
+
+def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.methods.distribution_matching import driftworld as driftworld_module
+
+    calls = []
+    losses = iter((2.0, 3.0, 5.0, 7.0))
+
+    def fake_drifting_loss(generated, positive, **kwargs):
+        calls.append(kwargs["negative"])
+        return generated.new_tensor(next(losses), requires_grad=True), {}
+
+    monkeypatch.setattr(driftworld_module, "drifting_loss", fake_drifting_loss)
+    fake = SimpleNamespace(
+        config=SimpleNamespace(
+            generated_samples_per_condition=2,
+            mask_conditioning_latent_slot=True,
+            local_drift_weight=1.0,
+            trajectory_drift_weight=0.0,
+            dinov3_drift_weight=3.0,
+            static_negative_weight=1.0,
+            drift_radii=[0.02, 0.05],
+            compare_temporal_sample_force=False,
+        ),
+        input_shape=(1, 2, 1, 1),
+        device=torch.device("cpu"),
+    )
+    fake.net = SimpleNamespace(
+        noise_scheduler=SimpleNamespace(
+            max_sigma=1.0,
+            max_t=1.0,
+            t_precision=torch.float32,
+            latents=lambda noise: noise,
+        )
+    )
+    real = torch.randn(1, 1, 2, 1, 1)
+    fake._prepare_data = lambda data: (real, data["condition"])
+    fake._positives = lambda data, value: value.unsqueeze(1)
+    fake.gen_data_from_net = lambda noise, timestep, condition: noise
+    fake._get_outputs = lambda *args: {}
+    dino_negative = torch.randn(1, 1, 1)
+    fake._dinov3_drifting_fields = lambda generated, positive: [
+        (
+            f"block_{index}",
+            torch.randn(1, 2, 1, requires_grad=True),
+            torch.randn(1, 1, 1),
+            dino_negative,
+            torch.ones(1),
+        )
+        for index in (2, 5, 8)
+    ]
+
+    loss_map, _ = driftworld_module.DriftWorldModel.single_train_step(
+        fake, {"condition": torch.zeros(1, 1)}, iteration=1
+    )
+
+    assert calls[0] is None
+    assert calls[1:] == [dino_negative, dino_negative, dino_negative]
+    assert loss_map["total_loss"] == 17.0
+    assert loss_map["vae_weighted_loss"] == 2.0
+    assert loss_map["dino_weighted_loss"] == 15.0
 
 
 def test_video_tokens_drop_ti2v_conditioning_slot():
