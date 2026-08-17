@@ -83,6 +83,7 @@ def decode_video_segment(
     data: bytes | str | os.PathLike,
     num_frames: int,
     output_format: str = "torch",
+    start_frame: int | None = None,
 ) -> Optional[Union[np.ndarray, torch.Tensor]]:
     """Decodes a randomly selected segment of approximately num_frames from a video.
 
@@ -93,10 +94,12 @@ def decode_video_segment(
 
     Args:
         key (str): The key (filename/extension) associated with the data.
-        data (bytes): The video data as bytes.
+        data: Video bytes or a local video path.
         num_frames (int): The target number of frames to decode.
         output_format (str): The desired output format ('numpy' or 'torch').
                              Defaults to 'torch'.
+        start_frame (int | None): Optional zero-based frame at which decoding
+            starts. When omitted, a random segment is decoded.
 
     Returns:
         np.ndarray | torch.Tensor | None: The decoded video frames (exactly num_frames
@@ -107,6 +110,8 @@ def decode_video_segment(
         raise ValueError("output_format must be either 'numpy' or 'torch'")
     if num_frames <= 0:
         raise ValueError("num_frames must be positive")
+    if start_frame is not None and start_frame < 0:
+        raise ValueError("start_frame must be non-negative when provided")
 
     if get_extension(key) not in VIDEO_EXTENSIONS:
         return None
@@ -124,6 +129,28 @@ def decode_video_segment(
             if video.time_base is None:
                 logger.warning(f"Key '{key}': Video stream has no time_base. Cannot process.")
                 return None
+
+            # Decode sequentially for a frame-exact offset. Timestamp seeking can
+            # land on an earlier keyframe and is unsuitable for fixed frame IDs.
+            if start_frame is not None:
+                for frame_index, frame in enumerate(container.decode(video)):
+                    if frame_index < start_frame:
+                        continue
+                    try:
+                        frames.append(frame.to_ndarray(format="rgb24"))
+                        if len(frames) >= num_frames:
+                            break
+                    except Exception as frame_decode_err:
+                        logger.warning(
+                            f"Key '{key}': Error decoding frame {frame_index}: "
+                            f"{frame_decode_err}. Skipping frame."
+                        )
+                result_array = np.asarray(frames)
+                return (
+                    torch.from_numpy(result_array)
+                    if output_format == "torch"
+                    else result_array
+                )
 
             # --- Calculate Durations and Random Start ---
             avg_fps = 0

@@ -37,6 +37,8 @@ class CSVVideoDataset(IterableDataset):
         positive_random_step_min: int = 1,
         positive_random_step_max: int = 3,
         positive_decode_step_max: int | None = None,
+        frame_stride: int = 1,
+        frame_start: int | None = None,
     ):
         super().__init__()
         if not os.path.isfile(index_path):
@@ -51,6 +53,12 @@ class CSVVideoDataset(IterableDataset):
         self.seed = int(seed)
         self.sampler_start_idx = int(sampler_start_idx or 0)
         self.dataset_size = dataset_size
+        self.frame_stride = int(frame_stride)
+        if self.frame_stride <= 0:
+            raise ValueError("frame_stride must be positive")
+        self.frame_start = None if frame_start is None else int(frame_start)
+        if self.frame_start is not None and self.frame_start < 0:
+            raise ValueError("frame_start must be non-negative when provided")
         self.positive_frame_strides = tuple(int(stride) for stride in positive_frame_strides)
         if not self.positive_frame_strides or any(
             stride <= 0 for stride in self.positive_frame_strides
@@ -77,6 +85,7 @@ class CSVVideoDataset(IterableDataset):
         required_step_max = max(
             max(self.positive_frame_strides),
             self.positive_random_step_max if self.positive_random_walk_count else 1,
+            self.frame_stride,
         )
         self.positive_decode_step_max = (
             required_step_max
@@ -112,7 +121,7 @@ class CSVVideoDataset(IterableDataset):
                     frame_count = int(float(row["n_frames"]))
                 except (KeyError, TypeError, ValueError):
                     continue
-                if frame_count < self.decode_length:
+                if frame_count < self.decode_length + (self.frame_start or 0):
                     continue
                 caption = next(
                     (row.get(key, "").strip() for key in self.caption_columns if row.get(key, "").strip()),
@@ -136,11 +145,7 @@ class CSVVideoDataset(IterableDataset):
         yield from buffer
 
     def _prepare(self, row: dict, rng: random.Random | None = None) -> dict | None:
-        if not os.path.isfile(row["path"]):
-            return None
-        video = decode_video_segment(
-            row["path"], row["path"], self.decode_length, output_format="torch"
-        )
+        video = self._load_video(row["path"])
         if video is None or video.shape[0] < self.decode_length:
             return None
         # Resize/crop the full temporal span once so every positive has exactly
@@ -161,14 +166,27 @@ class CSVVideoDataset(IterableDataset):
                 indices = self._random_walk_indices(rng)
                 positive_clips.append(full_video[:, indices])
         positives = torch.stack(positive_clips, dim=0)
+        real = full_video[:, :: self.frame_stride][:, : self.sequence_length]
         return {
-            "real": positives[0],
+            "real": real,
+            "positive": positives,
             "positive_raw": positives,
             "condition": row["caption"],
             "neg_condition": self.negative_prompt,
             "fname": row["path"],
             "shard": self.index_path,
         }
+
+    def _load_video(self, video_path: str) -> torch.Tensor | None:
+        if not os.path.isfile(video_path):
+            return None
+        return decode_video_segment(
+            video_path,
+            video_path,
+            self.decode_length,
+            output_format="torch",
+            start_frame=self.frame_start,
+        )
 
     def __iter__(self):
         worker = get_worker_info()

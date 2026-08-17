@@ -542,16 +542,33 @@ class WanVideoEncoder:
         )
         # We never update the encoder, so freeze it
         self.vae.eval().requires_grad_(False)
+        self.framewise = False
+
+    def set_framewise(self, enabled: bool = True):
+        """Encode and decode each temporal slot independently when enabled."""
+        self.framewise = bool(enabled)
+        return self
+
+    def _encode_impl(self, real_images: torch.Tensor, mode: str) -> torch.Tensor:
+        if mode == "sample":
+            return self.vae.encode(real_images, return_dict=False)[0].sample()
+        if mode == "argmax":
+            return self.vae.encode(real_images, return_dict=False)[0].mode()
+        raise ValueError(f"Invalid mode: {mode}. Supported modes: ['sample', 'argmax']")
 
     def encode(self, real_images: torch.Tensor, mode="sample") -> torch.Tensor:
         # Ensure real_images is on the same device as VAE to avoid device mismatch
         real_images = real_images.to(device=self.vae.device, dtype=self.vae.dtype)
-        if mode == "sample":
-            latent_images = self.vae.encode(real_images, return_dict=False)[0].sample()
-        elif mode == "argmax":
-            latent_images = self.vae.encode(real_images, return_dict=False)[0].mode()
+        if self.framewise and real_images.shape[2] > 1:
+            latent_images = torch.cat(
+                [
+                    self._encode_impl(real_images[:, :, index : index + 1], mode)
+                    for index in range(real_images.shape[2])
+                ],
+                dim=2,
+            )
         else:
-            raise ValueError(f"Invalid mode: {mode}. Supported modes: ['sample', 'argmax']")
+            latent_images = self._encode_impl(real_images, mode)
         latents_mean = (
             torch.tensor(self.vae.config.latents_mean)
             .view(1, self.vae.config.z_dim, 1, 1, 1)
@@ -575,7 +592,18 @@ class WanVideoEncoder:
         latents = latent_images / latents_std + latents_mean
         # Ensure latents is on the same device and dtype as VAE to avoid device mismatch
         latents = latents.to(device=self.vae.device, dtype=self.vae.dtype)
-        videos = self.vae.decode(latents, return_dict=False)[0].clip_(-1.0, 1.0)
+        if self.framewise and latents.shape[2] > 1:
+            videos = torch.cat(
+                [
+                    self.vae.decode(
+                        latents[:, :, index : index + 1], return_dict=False
+                    )[0]
+                    for index in range(latents.shape[2])
+                ],
+                dim=2,
+            ).clip_(-1.0, 1.0)
+        else:
+            videos = self.vae.decode(latents, return_dict=False)[0].clip_(-1.0, 1.0)
         return videos
 
     def to(self, *args, **kwargs):

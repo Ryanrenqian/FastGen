@@ -58,6 +58,8 @@ CSVVideoLoaderConfig = L(CSVVideoLoader)(
     negative_prompt="",
     num_workers=2,
     shuffle_size=1000,
+    frame_stride=1,
+    frame_start=None,
 )
 
 VideoLatentLoaderConfig = L(WDSLoader)(
