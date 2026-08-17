@@ -35,6 +35,7 @@ from fastgen.configs.callbacks import (
     ForcedWeightNorm_CALLBACK,
 )
 from fastgen.callbacks.callback import CallbackDict
+from fastgen.callbacks.wandb import init_wandb
 from fastgen.utils.test_utils import RunIf, run_distributed_test
 
 
@@ -710,6 +711,36 @@ def test_wandb_callback(get_model_data):
                 wandb_callback.on_app_begin()
 
         wandb_callback.on_optimizer_step_begin(model)
+
+
+@pytest.mark.parametrize(
+    ("trainer_resume", "expected_id", "expected_resume"),
+    [(False, "new-id", "never"), (True, "old-id", "allow")],
+)
+def test_init_wandb_id_follows_trainer_resume(
+    tmp_path, monkeypatch, trainer_resume, expected_id, expected_resume
+):
+    config = create_config()
+    config.trainer.resume = trainer_resume
+    config.log_config.wandb_mode = "disabled"
+    monkeypatch.setenv("FASTGEN_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WANDB_UPLOAD_CODE", "false")
+
+    os.makedirs(config.log_config.save_path, exist_ok=True)
+    wandb_id_path = os.path.join(config.log_config.save_path, "wandb_id.txt")
+    with open(wandb_id_path, "w", encoding="utf-8") as f:
+        f.write("old-id\n")
+
+    init_kwargs = {}
+    monkeypatch.setattr("fastgen.callbacks.wandb.wandb.util.generate_id", lambda: "new-id")
+    monkeypatch.setattr("fastgen.callbacks.wandb.wandb.init", lambda **kwargs: init_kwargs.update(kwargs))
+
+    init_wandb(config)
+
+    assert init_kwargs["id"] == expected_id
+    assert init_kwargs["resume"] == expected_resume
+    with open(wandb_id_path, encoding="utf-8") as f:
+        assert f.read().strip() == expected_id
 
 
 def test_callback_list(get_model_data):

@@ -194,18 +194,19 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
 
     assert config.model_class["_target_"] is DriftWorldModel
     assert config.model.net.model_id_or_local_path == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
-    assert config.model.input_shape == [48, 2, 24, 40]
+    assert config.model.input_shape == [48, 5, 16, 16]
     assert config.model.generated_samples_per_condition == 64
     assert config.model.trajectory_drift_block == (4, 2, 2)
-    assert config.model.local_drift_weight == 0.0
+    assert config.model.local_drift_weight == 1.0
     assert config.model.trajectory_drift_weight == 0.0
-    assert config.model.dinov3_drift_weight == 1.0
+    assert config.model.dinov3_drift_weight == 3.0
     assert config.model.dinov3_block_indices == (2, 5, 8)
     assert config.dataloader_train.sequence_length == 5
     assert config.dataloader_train.frame_start == 30
     assert config.dataloader_train.frame_stride == 1
     assert config.trainer.callbacks.wandb.sample_logging_iter == 500
-    assert config.model.framewise_vae is False
+    assert config.dataloader_train.img_size == (256, 256)
+    assert config.model.framewise_vae is True
     assert config.dataloader_train.index_path.endswith(
         "demo5_dataset/manifests/demo5_clean_10k_f49_seed10.csv"
     )

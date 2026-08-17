@@ -15,25 +15,23 @@ def create_config():
     config.model_class = L(DriftWorldModel)(config=None)
     config.model.net = Wan22_I2V_5B_Config
     config.model.fsdp_meta_init = True
-    # Jointly encode the five RGB frames with Wan's native 4x temporal VAE
-    # compression: five pixel frames become two latent temporal slots.
-    config.model.input_shape = [48, 2, 24, 40]
+    config.model.input_shape = [48, 5, 16, 16]
     config.model.precision = "bfloat16"
     config.model.precision_amp_enc = "bfloat16"
     config.model.student_sample_steps = 1
-    config.model.framewise_vae = False
+    config.model.framewise_vae = True
     config.model.generated_samples_per_condition = 64
     config.model.drift_radii = [0.02, 0.05]
     config.model.mask_conditioning_latent_slot = True
-    # Match Bridge DriftWorld's n_neg=64. Weight 1 corresponds to CFG
-    # alpha=64/63 in its static-transition-negative parameterization.
+    # Match Bridge DriftWorld's n_neg=64. Weight 1 corresponds to CFG alpha=64/63.
     config.model.static_negative_weight = 1.0
-    # This treatment evaluates the perceptual field alone. The Wan latent
-    # representation is used by the DiT, but does not receive a drift loss.
-    config.model.local_drift_weight = 0.0
+    # Match Bridge DriftWorld's local latent and DINOv3 feature objectives.
+    config.model.local_drift_weight = 1.0
     config.model.trajectory_drift_weight = 0.0
     config.model.trajectory_drift_block = (4, 2, 2)
-    config.model.dinov3_drift_weight = 1.0
+    # Three DINO blocks are averaged, so weight 3 gives each block the same
+    # effective objective weight as the latent field.
+    config.model.dinov3_drift_weight = 3.0
     config.model.dinov3_repo_dir = (
         "/mnt/home/renqian/imgGen/runtime/MODEL/dinov3/repo"
     )
@@ -67,7 +65,7 @@ def create_config():
     # Skip the initial static camera period, then use five adjacent frames.
     config.dataloader_train.frame_start = 30
     config.dataloader_train.frame_stride = 1
-    config.dataloader_train.img_size = (640, 384)
+    config.dataloader_train.img_size = (256, 256)
     config.dataloader_train.negative_prompt = ""
     config.dataloader_train.num_workers = 2
 
@@ -81,5 +79,5 @@ def create_config():
     # (generated and ground truth) at every scalar logging interval.
     config.trainer.callbacks.wandb.sample_logging_iter = 500
     config.log_config.group = "wan22_5b_ti2v_driftworld"
-    config.log_config.name = "wan22_ti2v5b_driftworld_dinov3_f5_s1_n64_10k"
+    config.log_config.name = "wan22_ti2v5b_driftworld_256x256_framewise_f5_s1_n64_10k"
     return config

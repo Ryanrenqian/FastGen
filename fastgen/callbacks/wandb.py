@@ -111,11 +111,13 @@ def init_wandb(config: BaseConfig):
 
     wandb_config = config.log_config
 
-    # Resume with or generate a wandb id
+    # Resume W&B only when the trainer itself is resuming. Reusing an ID for a
+    # fresh trainer causes W&B to reject steps that are lower than the old run.
     logger.info(f"wandb_config.save_path: {wandb_config.save_path}")
     os.makedirs(wandb_config.save_path, exist_ok=True)
     wandb_id_path = f"{wandb_config.save_path}/wandb_id.txt"
-    if os.path.isfile(wandb_id_path):
+    resume_wandb = config.trainer.resume is True and os.path.isfile(wandb_id_path)
+    if resume_wandb:
         with open(wandb_id_path, encoding="utf-8") as f:
             wandb_id = f.read().strip()
         logger.info(f"Resuming with an existing wandb id: {wandb_id}")
@@ -136,7 +138,7 @@ def init_wandb(config: BaseConfig):
         name=wandb_config.name,
         config=config_resolved,
         dir=wandb_config.save_path,
-        resume="allow",
+        resume="allow" if resume_wandb else "never",
         mode=wandb_config.wandb_mode,
     )
 

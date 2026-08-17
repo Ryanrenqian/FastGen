@@ -409,6 +409,7 @@ class DriftWorldModel(FastGenModel):
         weighted_loss = generated.new_zeros((), dtype=torch.float32)
         total_weight = 0.0
         metrics = {}
+        weighted_components = {}
         for field_name, field_weight, generated_tokens, positive_tokens, negative_tokens in fields:
             field_result = drifting_loss(
                 generated_tokens,
@@ -424,6 +425,7 @@ class DriftWorldModel(FastGenModel):
             field_loss, field_metrics = field_result[:2]
             weighted_loss = weighted_loss + field_weight * field_loss
             total_weight += field_weight
+            weighted_components[field_name] = field_weight * field_loss
             metrics[f"{field_name}_drifting_loss"] = field_loss.detach()
             metrics.update({f"{field_name}_{key}": value for key, value in field_metrics.items()})
             if self.config.compare_temporal_sample_force and field_name == "local":
@@ -491,7 +493,43 @@ class DriftWorldModel(FastGenModel):
             dinov3_loss = torch.stack(dinov3_losses).mean()
             weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
             total_weight += self.config.dinov3_drift_weight
+            weighted_components["dinov3"] = self.config.dinov3_drift_weight * dinov3_loss
             metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
         loss = weighted_loss / total_weight
+        for component_name, component_loss in weighted_components.items():
+            metrics[f"{component_name}_weighted_loss"] = (
+                component_loss / total_weight
+            ).detach()
+
+        # Log unambiguous VAE/DINO names, configured weights, weighted
+        # contributions, and their balance in the actual optimized objective.
+        if "local" in weighted_components:
+            vae_raw = metrics["local_drifting_loss"]
+            vae_weighted = weighted_components["local"] / total_weight
+            metrics["vae_drifting_loss"] = vae_raw
+            metrics["vae_drift_weight"] = vae_raw.new_tensor(
+                self.config.local_drift_weight
+            )
+            metrics["vae_weighted_loss"] = vae_weighted.detach()
+            # Preserve the existing latent aliases for dashboard compatibility.
+            metrics["latent_drifting_loss"] = vae_raw
+            metrics["latent_weighted_loss"] = vae_weighted.detach()
+        if "dinov3" in weighted_components:
+            dino_raw = metrics["dinov3_drifting_loss"]
+            dino_weighted = weighted_components["dinov3"] / total_weight
+            metrics["dino_drifting_loss"] = dino_raw
+            metrics["dino_drift_weight"] = dino_raw.new_tensor(
+                self.config.dinov3_drift_weight
+            )
+            metrics["dino_weighted_loss"] = dino_weighted.detach()
+        if "local" in weighted_components and "dinov3" in weighted_components:
+            pair_total = (vae_weighted + dino_weighted).clamp_min(1e-12)
+            ratio = dino_weighted / vae_weighted.clamp_min(1e-12)
+            metrics["dino_to_vae_loss_ratio"] = ratio.detach()
+            metrics["vae_loss_fraction"] = (vae_weighted / pair_total).detach()
+            metrics["dino_loss_fraction"] = (dino_weighted / pair_total).detach()
+            metrics["dinov3_to_latent_loss_ratio"] = ratio.detach()
+            metrics["latent_loss_fraction"] = (vae_weighted / pair_total).detach()
+            metrics["dinov3_loss_fraction"] = (dino_weighted / pair_total).detach()
         loss_map = {"total_loss": loss, "drifting_loss": loss, **metrics}
         return loss_map, self._get_outputs(generated_flat, input_student, condition)
