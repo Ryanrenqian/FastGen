@@ -178,10 +178,10 @@ class DinoV3FeatureExtractor(nn.Module):
                 outputs[f"block_{index}"].append(feature)
         return {name: torch.cat(chunks, dim=0) for name, chunks in outputs.items()}
 
-    def motion_weights(
+    def _motion_factor(
         self, positive: torch.Tensor, previous: torch.Tensor
     ) -> torch.Tensor:
-        """Create Bridge-style outlier-robust motion weights for patch tokens."""
+        """Return an outlier-robust motion factor in ``[0, 1]``."""
         delta = torch.linalg.vector_norm(
             positive.detach().float() - previous.detach().float(), dim=-1
         )
@@ -193,4 +193,16 @@ class DinoV3FeatureExtractor(nn.Module):
         gate = (1.0 - median / (scale + 1e-6)).clamp(0.0, 1.0)
         excess = (normalized - self.motion_threshold).clamp_min(0.0)
         excess = excess / max(1.0 - self.motion_threshold, 1e-6)
-        return 1.0 + self.motion_lambda * torch.tanh(self.motion_alpha * excess) * gate
+        return torch.tanh(self.motion_alpha * excess) * gate
+
+    def motion_weights(
+        self, positive: torch.Tensor, previous: torch.Tensor
+    ) -> torch.Tensor:
+        """Create Bridge-style motion amplification for DINO loss tokens."""
+        return 1.0 + self.motion_lambda * self._motion_factor(positive, previous)
+
+    def motion_negative_weights(
+        self, positive: torch.Tensor, previous: torch.Tensor
+    ) -> torch.Tensor:
+        """Gate the preceding-frame fixed negative by semantic motion."""
+        return self._motion_factor(positive, previous)

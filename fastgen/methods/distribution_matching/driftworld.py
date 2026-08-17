@@ -266,7 +266,9 @@ class DriftWorldModel(FastGenModel):
 
     def _dinov3_drifting_fields(
         self, generated: torch.Tensor, positive: torch.Tensor
-    ) -> list[tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> list[
+        tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    ]:
         """Decode videos and construct Bridge-compatible DINOv3 drift fields."""
         batch, candidates = generated.shape[:2]
         if positive.shape[1] != 1:
@@ -305,8 +307,18 @@ class DriftWorldModel(FastGenModel):
             motion_weight = self.dinov3.motion_weights(
                 positive_features[layer_name], previous_features[layer_name]
             ).reshape(-1)
+            negative_weight = self.dinov3.motion_negative_weights(
+                positive_features[layer_name], previous_features[layer_name]
+            ).reshape(-1, 1)
             fields.append(
-                (layer_name, generated_tokens, positive_tokens, previous_tokens, motion_weight)
+                (
+                    layer_name,
+                    generated_tokens,
+                    positive_tokens,
+                    previous_tokens,
+                    motion_weight,
+                    negative_weight,
+                )
             )
         return fields
 
@@ -433,14 +445,21 @@ class DriftWorldModel(FastGenModel):
 
         if self.config.dinov3_drift_weight > 0:
             dinov3_losses = []
-            for layer_name, generated_tokens, positive_tokens, negative_tokens, motion_weight in (
-                self._dinov3_drifting_fields(generated, positive)
-            ):
+            dinov3_negative_weight_means = []
+            dinov3_negative_active_fractions = []
+            for (
+                layer_name,
+                generated_tokens,
+                positive_tokens,
+                negative_tokens,
+                motion_weight,
+                negative_weight,
+            ) in self._dinov3_drifting_fields(generated, positive):
                 layer_result = drifting_loss(
                     generated_tokens,
                     positive_tokens,
                     negative=negative_tokens,
-                    negative_weight=self.config.static_negative_weight,
+                    negative_weight=self.config.static_negative_weight * negative_weight,
                     group_weight=motion_weight,
                     radii=self.config.drift_radii,
                     return_force=self.config.compare_temporal_sample_force,
@@ -448,6 +467,16 @@ class DriftWorldModel(FastGenModel):
                 layer_loss, layer_metrics = layer_result[:2]
                 dinov3_losses.append(layer_loss)
                 metrics[f"dinov3_{layer_name}_drifting_loss"] = layer_loss.detach()
+                metrics[f"dinov3_{layer_name}_negative_weight_mean"] = (
+                    self.config.static_negative_weight * negative_weight.mean()
+                ).detach()
+                metrics[f"dinov3_{layer_name}_negative_active_fraction"] = (
+                    negative_weight > 1e-3
+                ).float().mean().detach()
+                dinov3_negative_weight_means.append(negative_weight.mean())
+                dinov3_negative_active_fractions.append(
+                    (negative_weight > 1e-3).float().mean()
+                )
                 metrics.update(
                     {
                         f"dinov3_{layer_name}_{key}": value
@@ -477,6 +506,13 @@ class DriftWorldModel(FastGenModel):
             weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
             weighted_components["dinov3"] = self.config.dinov3_drift_weight * dinov3_loss
             metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
+            metrics["dino_negative_weight_mean"] = (
+                self.config.static_negative_weight
+                * torch.stack(dinov3_negative_weight_means).mean()
+            ).detach()
+            metrics["dino_negative_active_fraction"] = torch.stack(
+                dinov3_negative_active_fractions
+            ).mean().detach()
         # Bridge DriftWorld sums feature-field losses. With three averaged DINO
         # blocks at weight 3 this is VAE + DINO_2 + DINO_5 + DINO_8.
         loss = weighted_loss

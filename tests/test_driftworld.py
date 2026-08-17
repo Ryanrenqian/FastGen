@@ -109,7 +109,7 @@ def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
     losses = iter((2.0, 3.0, 5.0, 7.0))
 
     def fake_drifting_loss(generated, positive, **kwargs):
-        calls.append(kwargs["negative"])
+        calls.append((kwargs["negative"], kwargs["negative_weight"]))
         return generated.new_tensor(next(losses), requires_grad=True), {}
 
     monkeypatch.setattr(driftworld_module, "drifting_loss", fake_drifting_loss)
@@ -141,6 +141,7 @@ def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
     fake.gen_data_from_net = lambda noise, timestep, condition: noise
     fake._get_outputs = lambda *args: {}
     dino_negative = torch.randn(1, 1, 1)
+    dino_negative_weight = torch.tensor([[0.75]])
     fake._dinov3_drifting_fields = lambda generated, positive: [
         (
             f"block_{index}",
@@ -148,6 +149,7 @@ def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
             torch.randn(1, 1, 1),
             dino_negative,
             torch.ones(1),
+            dino_negative_weight,
         )
         for index in (2, 5, 8)
     ]
@@ -156,11 +158,45 @@ def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
         fake, {"condition": torch.zeros(1, 1)}, iteration=1
     )
 
-    assert calls[0] is None
-    assert calls[1:] == [dino_negative, dino_negative, dino_negative]
+    assert calls[0][0] is None
+    assert [call[0] for call in calls[1:]] == [
+        dino_negative,
+        dino_negative,
+        dino_negative,
+    ]
+    assert all(torch.equal(call[1], dino_negative_weight) for call in calls[1:])
     assert loss_map["total_loss"] == 17.0
     assert loss_map["vae_weighted_loss"] == 2.0
     assert loss_map["dino_weighted_loss"] == 15.0
+
+
+def test_dino_static_negative_weight_is_zero_without_motion():
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.features.dinov3 import DinoV3FeatureExtractor
+
+    extractor = SimpleNamespace(
+        motion_quantile=0.98,
+        motion_threshold=0.35,
+        motion_alpha=2.5,
+    )
+    extractor._motion_factor = lambda positive, previous: (
+        DinoV3FeatureExtractor._motion_factor(extractor, positive, previous)
+    )
+    static = torch.ones(2, 4, 3)
+    moving = static.clone()
+    moving[:, 0] += 2.0
+
+    static_weight = DinoV3FeatureExtractor.motion_negative_weights(
+        extractor, static, static
+    )
+    moving_weight = DinoV3FeatureExtractor.motion_negative_weights(
+        extractor, moving, static
+    )
+
+    assert torch.equal(static_weight, torch.zeros_like(static_weight))
+    assert moving_weight[:, 0].min() > 0
+    assert torch.equal(moving_weight[:, 1:], torch.zeros_like(moving_weight[:, 1:]))
 
 
 def test_video_tokens_drop_ti2v_conditioning_slot():
