@@ -131,31 +131,6 @@ def test_dinov3_video_tokens_keep_candidates_aligned():
     assert torch.equal(tokens[0, 2], original[0, 2, 0, 0])
 
 
-def test_joint_pca_feature_video_aligns_generated_and_gt_colors():
-    if importlib.util.find_spec("omegaconf") is None:
-        pytest.skip("FastGen framework dependencies are not installed")
-    from fastgen.methods.distribution_matching.driftworld import _joint_pca_feature_video
-
-    batch, candidates, frames, patches, feature_dim = 1, 3, 4, 16, 8
-    reference = torch.randn(batch * frames, patches, feature_dim)
-    generated = reference.reshape(batch, 1, frames, patches, feature_dim).expand(
-        -1, candidates, -1, -1, -1
-    ).reshape(batch * candidates * frames, patches, feature_dim)
-
-    comparison = _joint_pca_feature_video(
-        generated,
-        reference,
-        batch=batch,
-        candidates=candidates,
-        frames=frames,
-        output_size=(12, 20),
-    )
-
-    assert comparison.shape == (batch, 3, frames, 12, 40)
-    assert comparison.min() >= 0 and comparison.max() <= 1
-    assert torch.allclose(comparison[..., :20], comparison[..., 20:], atol=1e-5)
-
-
 def test_temporal_sample_force_comparison_is_finite_and_frame_aligned():
     if importlib.util.find_spec("omegaconf") is None:
         pytest.skip("FastGen framework dependencies are not installed")
@@ -226,8 +201,6 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     assert config.model.trajectory_drift_weight == 0.0
     assert config.model.dinov3_drift_weight == 1.0
     assert config.model.dinov3_block_indices == (2, 5, 8)
-    assert config.model.dinov3_pca_visualization is True
-    assert config.model.dinov3_pca_visualization_interval == 500
     assert config.dataloader_train.sequence_length == 5
     assert config.dataloader_train.frame_start == 30
     assert config.dataloader_train.frame_stride == 1

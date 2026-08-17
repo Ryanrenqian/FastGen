@@ -50,8 +50,6 @@ def create_config():
     config.model.dinov3_motion_lambda = 12.0
     config.model.dinov3_motion_quantile = 0.98
     config.model.dinov3_motion_threshold = 0.35
-    config.model.dinov3_pca_visualization = True
-    config.model.dinov3_pca_visualization_interval = 500
     config.model.net_optimizer.optim_type = "adamw"
     config.model.net_optimizer.lr = 1e-7
     config.model.net_optimizer.weight_decay = 0.01

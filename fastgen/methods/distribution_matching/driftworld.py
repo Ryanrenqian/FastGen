@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any, Callable, Dict, TYPE_CHECKING
 
 import torch
@@ -14,7 +13,6 @@ from torch.utils.checkpoint import checkpoint
 from fastgen.methods.model import FastGenModel
 from fastgen.drifting_loss import drifting_loss
 from fastgen.features import DinoV3FeatureExtractor
-from fastgen.utils.distributed import is_rank0
 
 if TYPE_CHECKING:
     from fastgen.configs.methods.config_driftworld import ModelConfig
@@ -105,62 +103,6 @@ def _dinov3_video_tokens(
         .permute(0, 2, 3, 1, 4)
         .reshape(batch * frames * patches, candidates, feature_dim)
     )
-
-
-@torch.no_grad()
-def _joint_pca_feature_video(
-    generated_features: torch.Tensor,
-    positive_features: torch.Tensor,
-    *,
-    batch: int,
-    candidates: int,
-    frames: int,
-    output_size: tuple[int, int],
-) -> torch.Tensor:
-    """Render generated/GT patch tokens with a shared three-component PCA basis.
-
-    The first generated candidate and its GT video are projected jointly so the
-    same RGB color denotes the same DINO direction on both sides. The returned
-    video is ``generated | GT`` with shape ``[B, 3, F, H, 2W]`` in ``[0, 1]``.
-    """
-    if generated_features.ndim != 3 or positive_features.ndim != 3:
-        raise ValueError("DINOv3 PCA inputs must have shape [frames, patches, features]")
-    patches, feature_dim = generated_features.shape[1:]
-    patch_side = math.isqrt(patches)
-    if patch_side * patch_side != patches:
-        raise ValueError("DINOv3 PCA visualization requires a square patch grid")
-    if feature_dim < 3:
-        raise ValueError("DINOv3 PCA visualization requires at least three features")
-    expected_generated = batch * candidates * frames
-    expected_positive = batch * frames
-    if generated_features.shape[0] != expected_generated:
-        raise ValueError("generated DINOv3 features do not match batch layout")
-    if positive_features.shape[0] != expected_positive:
-        raise ValueError("positive DINOv3 features do not match batch layout")
-
-    generated = generated_features.float().reshape(
-        batch, candidates, frames, patches, feature_dim
-    )[:, 0]
-    positive = positive_features.float().reshape(batch, frames, patches, feature_dim)
-    comparisons = []
-    for batch_index in range(batch):
-        pair = torch.cat((generated[batch_index], positive[batch_index]), dim=0)
-        flat = pair.reshape(-1, feature_dim)
-        centered = flat - flat.mean(dim=0, keepdim=True)
-        # Low-rank PCA is sufficient for RGB visualization and avoids a full
-        # decomposition of the 768-dimensional DINOv3 token space.
-        _, _, basis = torch.pca_lowrank(centered, q=3, center=False, niter=4)
-        projected = centered @ basis
-        lower = torch.quantile(projected, 0.01, dim=0, keepdim=True)
-        upper = torch.quantile(projected, 0.99, dim=0, keepdim=True)
-        projected = ((projected - lower) / (upper - lower).clamp_min(1e-6)).clamp(0.0, 1.0)
-        projected = projected.reshape(2, frames, patches, 3)
-        projected = projected.reshape(2 * frames, patch_side, patch_side, 3).permute(0, 3, 1, 2)
-        projected = torch.nn.functional.interpolate(
-            projected, size=output_size, mode="nearest"
-        ).reshape(2, frames, 3, *output_size)
-        comparisons.append(torch.cat((projected[0], projected[1]), dim=-1))
-    return torch.stack(comparisons).permute(0, 2, 1, 3, 4).cpu()
 
 
 def _compare_temporal_sample_force(
@@ -287,8 +229,6 @@ class DriftWorldModel(FastGenModel):
                 raise ValueError("framewise_vae requires a video encoder with set_framewise()")
             self.net.vae.set_framewise(True)
         if self.config.dinov3_drift_weight > 0:
-            if self.config.dinov3_pca_visualization_interval <= 0:
-                raise ValueError("dinov3_pca_visualization_interval must be positive")
             self.dinov3 = DinoV3FeatureExtractor(
                 repo_dir=self.config.dinov3_repo_dir,
                 weights_path=self.config.dinov3_weights_path,
@@ -325,15 +265,8 @@ class DriftWorldModel(FastGenModel):
         return torch.cat(outputs, dim=0)
 
     def _dinov3_drifting_fields(
-        self,
-        generated: torch.Tensor,
-        positive: torch.Tensor,
-        *,
-        render_pca: bool = False,
-    ) -> tuple[
-        list[tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
-        torch.Tensor | None,
-    ]:
+        self, generated: torch.Tensor, positive: torch.Tensor
+    ) -> list[tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Decode videos and construct Bridge-compatible DINOv3 drift fields."""
         batch, candidates = generated.shape[:2]
         if positive.shape[1] != 1:
@@ -356,7 +289,6 @@ class DriftWorldModel(FastGenModel):
             previous_features = self.dinov3(previous_frames)
 
         fields = []
-        pca_comparison = None
         for layer_name in generated_features:
             generated_tokens = _dinov3_video_tokens(
                 generated_features[layer_name],
@@ -376,16 +308,7 @@ class DriftWorldModel(FastGenModel):
             fields.append(
                 (layer_name, generated_tokens, positive_tokens, previous_tokens, motion_weight)
             )
-            if render_pca and layer_name == f"block_{self.config.dinov3_block_indices[-1]}":
-                pca_comparison = _joint_pca_feature_video(
-                    generated_features[layer_name],
-                    positive_features[layer_name],
-                    batch=batch,
-                    candidates=candidates,
-                    frames=frames,
-                    output_size=tuple(generated_pixels.shape[-2:]),
-                )
-        return fields, pca_comparison
+        return fields
 
     def _prepare_data(self, data: Dict[str, Any]) -> tuple[torch.Tensor, Any]:
         if "neg_condition" not in data:
@@ -423,6 +346,7 @@ class DriftWorldModel(FastGenModel):
     def single_train_step(
         self, data: Dict[str, Any], iteration: int
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor | Callable]]:
+        del iteration
         real, condition = self._prepare_data(data)
         positive = self._positives(data, real)
         batch = real.shape[0]
@@ -524,14 +448,9 @@ class DriftWorldModel(FastGenModel):
 
         if self.config.dinov3_drift_weight > 0:
             dinov3_losses = []
-            render_pca = self.config.dinov3_pca_visualization and is_rank0() and (
-                iteration == 1
-                or iteration % self.config.dinov3_pca_visualization_interval == 0
-            )
-            dinov3_fields, pca_comparison = self._dinov3_drifting_fields(
-                generated, positive, render_pca=render_pca
-            )
-            for layer_name, generated_tokens, positive_tokens, negative_tokens, motion_weight in dinov3_fields:
+            for layer_name, generated_tokens, positive_tokens, negative_tokens, motion_weight in (
+                self._dinov3_drifting_fields(generated, positive)
+            ):
                 layer_result = drifting_loss(
                     generated_tokens,
                     positive_tokens,
@@ -575,7 +494,4 @@ class DriftWorldModel(FastGenModel):
             metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
         loss = weighted_loss / total_weight
         loss_map = {"total_loss": loss, "drifting_loss": loss, **metrics}
-        outputs = self._get_outputs(generated_flat, input_student, condition)
-        if self.config.dinov3_drift_weight > 0 and pca_comparison is not None:
-            outputs["dinov3_pca_comparison"] = pca_comparison
-        return loss_map, outputs
+        return loss_map, self._get_outputs(generated_flat, input_student, condition)
