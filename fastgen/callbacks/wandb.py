@@ -338,6 +338,13 @@ class WandbCallback(Callback):
                 sample_map["student/generation"] = to_wandb(gen_rand, caption=caption, vid_format=self.vid_format)
             if "real" in data_batch:
                 sample_map["data/real"] = to_wandb(data_batch["real"], caption=caption, vid_format=self.vid_format)
+            if "dinov3_pca_comparison" in output_batch:
+                sample_map["student/dinov3_pca_generated_left_gt_right"] = to_wandb(
+                    output_batch["dinov3_pca_comparison"],
+                    normalized=True,
+                    caption="DINOv3 joint PCA: generated (left) | ground truth (right)",
+                    vid_format=self.vid_format,
+                )
             if "gen_teacher" in output_batch:
                 sample_map["teacher/generation"] = to_wandb(
                     output_batch["gen_teacher"], caption=caption, vid_format=self.vid_format

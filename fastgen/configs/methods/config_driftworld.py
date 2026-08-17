@@ -41,6 +41,8 @@ class ModelConfig(BaseModelConfig):
     dinov3_motion_lambda: float = 12.0
     dinov3_motion_quantile: float = 0.98
     dinov3_motion_threshold: float = 0.35
+    dinov3_pca_visualization: bool = False
+    dinov3_pca_visualization_interval: int = 500
 
 
 @attrs.define(slots=False)
