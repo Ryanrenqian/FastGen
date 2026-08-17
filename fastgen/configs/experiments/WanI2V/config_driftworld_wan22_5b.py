@@ -23,9 +23,10 @@ def create_config():
     config.model.generated_samples_per_condition = 64
     config.model.drift_radii = [0.02, 0.05]
     config.model.mask_conditioning_latent_slot = True
-    # The preceding real frame is an extra fixed negative only in DINO space.
-    # Generated candidates remain mutually repulsive in every drift field.
-    config.model.static_negative_weight = 1.0
+    # Disable preceding-frame repulsion. Generated candidates still remain
+    # mutually repulsive in every drift field.
+    config.model.use_dinov3_static_negative = False
+    config.model.static_negative_weight = 0.0
     # Match Bridge DriftWorld's local latent and DINOv3 feature objectives.
     config.model.local_drift_weight = 1.0
     config.model.trajectory_drift_weight = 0.0

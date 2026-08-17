@@ -100,7 +100,7 @@ def test_bridge_field_objective_is_direct_sum():
     assert objective == vae_loss + dino_block_losses.sum()
 
 
-def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
+def test_wan_objective_disables_previous_frame_negative(monkeypatch):
     if importlib.util.find_spec("omegaconf") is None:
         pytest.skip("FastGen framework dependencies are not installed")
     from fastgen.methods.distribution_matching import driftworld as driftworld_module
@@ -121,6 +121,7 @@ def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
             trajectory_drift_weight=0.0,
             dinov3_drift_weight=3.0,
             static_negative_weight=1.0,
+            use_dinov3_static_negative=False,
             drift_radii=[0.02, 0.05],
             compare_temporal_sample_force=False,
         ),
@@ -159,12 +160,8 @@ def test_wan_objective_uses_previous_frame_negative_only_for_dino(monkeypatch):
     )
 
     assert calls[0][0] is None
-    assert [call[0] for call in calls[1:]] == [
-        dino_negative,
-        dino_negative,
-        dino_negative,
-    ]
-    assert all(torch.equal(call[1], dino_negative_weight) for call in calls[1:])
+    assert [call[0] for call in calls[1:]] == [None, None, None]
+    assert all(call[1] == 0.0 for call in calls[1:])
     assert loss_map["total_loss"] == 17.0
     assert loss_map["vae_weighted_loss"] == 2.0
     assert loss_map["dino_weighted_loss"] == 15.0
@@ -309,6 +306,8 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     assert config.model.local_drift_weight == 1.0
     assert config.model.trajectory_drift_weight == 0.0
     assert config.model.dinov3_drift_weight == 3.0
+    assert config.model.use_dinov3_static_negative is False
+    assert config.model.static_negative_weight == 0.0
     assert config.model.dinov3_block_indices == (2, 5, 8)
     assert config.dataloader_train.sequence_length == 5
     assert config.dataloader_train.frame_start == 30

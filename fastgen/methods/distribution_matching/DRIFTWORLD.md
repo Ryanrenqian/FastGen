@@ -11,11 +11,10 @@ Bridge DriftWorld DINOv3 field. The DINOv3 field
 differentiably decodes Wan latents, extracts normalized ViT-B/16 patch tokens
 from blocks 2, 5, and 8, and applies the reference motion-token weighting. The
 candidates act as mutually repulsive samples and the data video is the positive
-sample. Only the DINOv3 fields add the preceding real frame as a fixed
-static-transition negative, and its negative weight is gated by the same
-semantic-motion factor used for motion amplification. Static tokens therefore
-receive zero or negligible preceding-frame repulsion; the latent field has no
-extra fixed negative. This
+sample. The preceding-frame fixed negative is implemented as an optional
+DINOv3-only ablation, with motion-gated weights, but is disabled in the formal
+Wan configuration to avoid introducing temporal flicker. The latent field also
+has no extra fixed negative. This
 preserves the original latent-spatial signal while adding
 perceptual semantics. The optional trajectory-block field remains implemented
 for ablations but is disabled in the formal configuration. It does not import Bridge's

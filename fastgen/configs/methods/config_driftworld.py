@@ -25,6 +25,7 @@ class ModelConfig(BaseModelConfig):
     drift_radii: list[float] = attrs.field(factory=lambda: [0.02, 0.05])
     mask_conditioning_latent_slot: bool = True
     static_negative_weight: float = 0.0
+    use_dinov3_static_negative: bool = False
     compare_temporal_sample_force: bool = False
     local_drift_weight: float = 1.0
     trajectory_drift_weight: float = 0.0

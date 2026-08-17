@@ -310,6 +310,9 @@ class DriftWorldModel(FastGenModel):
             negative_weight = self.dinov3.motion_negative_weights(
                 positive_features[layer_name], previous_features[layer_name]
             ).reshape(-1, 1)
+            if not self.config.use_dinov3_static_negative:
+                previous_tokens = None
+                negative_weight = torch.zeros_like(negative_weight)
             fields.append(
                 (
                     layer_name,
@@ -455,11 +458,18 @@ class DriftWorldModel(FastGenModel):
                 motion_weight,
                 negative_weight,
             ) in self._dinov3_drifting_fields(generated, positive):
+                if not self.config.use_dinov3_static_negative:
+                    negative_tokens = None
+                    negative_weight = torch.zeros_like(negative_weight)
                 layer_result = drifting_loss(
                     generated_tokens,
                     positive_tokens,
                     negative=negative_tokens,
-                    negative_weight=self.config.static_negative_weight * negative_weight,
+                    negative_weight=(
+                        self.config.static_negative_weight * negative_weight
+                        if negative_tokens is not None
+                        else 0.0
+                    ),
                     group_weight=motion_weight,
                     radii=self.config.drift_radii,
                     return_force=self.config.compare_temporal_sample_force,
