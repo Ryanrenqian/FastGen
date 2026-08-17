@@ -169,7 +169,6 @@ class CSVVideoDataset(IterableDataset):
         real = full_video[:, :: self.frame_stride][:, : self.sequence_length]
         return {
             "real": real,
-            "positive": positives,
             "positive_raw": positives,
             "condition": row["caption"],
             "neg_condition": self.negative_prompt,

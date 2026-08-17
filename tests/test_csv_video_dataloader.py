@@ -79,8 +79,8 @@ def test_csv_video_loader_builds_stride_positives(tmp_path, monkeypatch):
 
     sample = next(iter(dataset))
 
-    assert sample["positive"].shape == (3, 3, 5, 8, 8)
-    observed = ((sample["positive"][:, 0, :, 0, 0] + 1) * 127.5).round()
+    assert sample["positive_raw"].shape == (3, 3, 5, 8, 8)
+    observed = ((sample["positive_raw"][:, 0, :, 0, 0] + 1) * 127.5).round()
     assert torch.equal(
         observed,
         torch.tensor([[0, 1, 2, 3, 4], [0, 2, 4, 6, 8], [0, 3, 6, 9, 12]]),
