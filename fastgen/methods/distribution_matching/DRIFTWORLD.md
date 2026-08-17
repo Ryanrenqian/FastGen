@@ -44,3 +44,6 @@ the initially static portion of each video, and initializes the student from
 into one Wan latent frame and each generated latent frame is independently
 decoded. Each condition draws 64 candidates, matching Bridge DriftWorld's
 `n_neg=64`.
+Only the first candidate per condition is returned to the generic W&B callback;
+the experiment records generated and ground-truth videos every 500 steps while
+keeping scalar metrics at the launcher's 10-step interval.

@@ -74,6 +74,9 @@ def create_config():
     config.trainer.save_ckpt_iter = 500
     config.trainer.max_iter = 10_001
     config.trainer.callbacks.grad_clip.grad_norm = 2.0
+    # Keep scalar metrics frequent, but avoid encoding/uploading two MP4 files
+    # (generated and ground truth) at every scalar logging interval.
+    config.trainer.callbacks.wandb.sample_logging_iter = 500
     config.log_config.group = "wan22_5b_ti2v_driftworld"
     config.log_config.name = "wan22_ti2v5b_driftworld_framewise_f5_s1_n64_10k"
     return config

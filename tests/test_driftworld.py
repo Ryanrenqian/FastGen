@@ -169,6 +169,7 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     assert config.dataloader_train.sequence_length == 5
     assert config.dataloader_train.frame_start == 30
     assert config.dataloader_train.frame_stride == 1
+    assert config.trainer.callbacks.wandb.sample_logging_iter == 500
     assert config.model.framewise_vae is True
     assert config.dataloader_train.index_path.endswith(
         "demo5_dataset/manifests/demo5_clean_10k_f49_seed10.csv"
