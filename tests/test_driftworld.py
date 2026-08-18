@@ -305,6 +305,7 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     assert config.model.net.model_id_or_local_path == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
     assert config.model.input_shape == [48, 5, 16, 16]
     assert config.model.generated_samples_per_condition == 64
+    assert "ema0999_cond_only" in config.log_config.name
     assert config.model.trajectory_drift_block == (4, 2, 2)
     assert config.model.local_drift_weight == 1.0
     assert config.model.trajectory_drift_weight == 0.0

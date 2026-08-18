@@ -1,0 +1,67 @@
+project: FastGen
+version: 1
+updated_at: 2026-08-18
+
+# Machine-readable branch-to-worktree mappings used before deployment, remote
+# validation, debugging, or training. Paths are absolute on the named server.
+servers:
+  aliyun-47-116-39-128-1017:
+    worktrees:
+      - branch: main
+        path: /mnt/home/renqian/oneNFE/FastGen
+        purpose: upstream-compatible main checkout
+        status: active
+
+      - branch: feature/wan22-driftworld-f5-s1-n64
+        path: /mnt/home/renqian/oneNFE/FastGen-driftworld
+        purpose: Wan2.2 TI2V DriftWorld development and validation
+        status: active
+
+      - branch: feature/wan22-driftworld-ema-cond-only
+        path: /mnt/home/renqian/oneNFE/FastGen-driftworld-ema-cond-only
+        purpose: Conditional-only Wan2.2 DriftWorld with EMA stabilization
+        status: active
+
+      - branch: feature/wan22-driftworld-temporal-weight-search
+        path: /mnt/home/renqian/oneNFE/FastGen-driftworld-temporal
+        purpose: Calibrate latent and DINOv3 temporal-velocity drifting fields
+        status: active
+
+      - branch: feature/wan22-driftworld-dinov3-only
+        path: /mnt/home/renqian/oneNFE/FastGen-driftworld-dinov3-only
+        purpose: Wan2.2 TI2V DriftWorld ablation without latent-space drift loss
+        status: active
+
+      - branch: feature/wan22-ti2v-tfd
+        path: /mnt/home/renqian/oneNFE/FastGen-tfd
+        purpose: Wan2.2 TI2V teacher-feature-drifting development
+        status: active
+
+      - branch: analysis/wan-vae-temporal-web
+        path: /mnt/home/renqian/oneNFE/FastGen-wan-vae-analysis
+        purpose: Wan2.2 VAE temporal PCA, clustering, and static web reports
+        status: active
+
+      - branch: feature/tfd-imagenet64-n8
+        path: /mnt/home/renqian/oneNFE/FastGen-tfd-n8
+        purpose: ImageNet-64 TFD n8 experiments
+        status: active
+
+      - branch: hyp22-single-anchor
+        path: /mnt/home/renqian/oneNFE/.experiment-worktrees/hyp22-single-anchor
+        purpose: isolated single-anchor hypothesis experiments
+        status: active
+
+      - branch: detached
+        expected_commit: dd307d13d4374dcf1654d09bc9a3de57ca8e4648
+        path: /mnt/home/renqian/oneNFE/FastGen-hyp21-ab-validate
+        purpose: pinned hyp21 A/B validation checkout
+        status: active
+
+      - branch: detached
+        expected_commit: 18e98b833545bcc05ffaae9a5a6259b4abe7770b
+        intended_branch: wan22-single-step-cfg-20260813
+        path: /mnt/home/renqian/oneNFE/FastGen-tfd/.experiment-worktrees/wan22-single-step-cfg-20260813
+        purpose: older pinned single-step CFG experiment checkout
+        status: stale
+        note: Does not match the current branch tip; do not deploy here until refreshed and re-registered.

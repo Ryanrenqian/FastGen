@@ -23,6 +23,8 @@ def create_config():
     config.model.generated_samples_per_condition = 64
     config.model.drift_radii = [0.02, 0.05]
     config.model.mask_conditioning_latent_slot = True
+    # Conditional-only experiment: train on the caption and first-frame
+    # condition. Do not add an empty-text/CFG branch.
     # Disable preceding-frame repulsion. Generated candidates still remain
     # mutually repulsive in every drift field.
     config.model.use_dinov3_static_negative = False
@@ -84,5 +86,7 @@ def create_config():
     config.trainer.callbacks.wandb.save_media_locally = True
     config.trainer.callbacks.wandb.local_media_fps = 8
     config.log_config.group = "wan22_5b_ti2v_driftworld"
-    config.log_config.name = "wan22_ti2v5b_driftworld_256x256_framewise_f5_s1_n64_10k"
+    config.log_config.name = (
+        "wan22_ti2v5b_driftworld_ema0999_cond_only_256x256_f5_s1_n64_10k"
+    )
     return config
