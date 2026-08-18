@@ -299,6 +299,9 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     config = create_config()
 
     assert config.model_class["_target_"] is DriftWorldModel
+    assert config.model.use_ema is True
+    assert config.trainer.callbacks.ema.type == "constant"
+    assert config.trainer.callbacks.ema.beta == pytest.approx(0.999)
     assert config.model.net.model_id_or_local_path == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
     assert config.model.input_shape == [48, 5, 16, 16]
     assert config.model.generated_samples_per_condition == 64

@@ -7,6 +7,7 @@ import attrs
 from omegaconf import DictConfig
 
 from fastgen.configs.callbacks import (
+    EMA_CALLBACK,
     GPUStats_CALLBACK,
     GradClip_CALLBACK,
     ParamCount_CALLBACK,
@@ -20,6 +21,8 @@ from fastgen.utils import LazyCall as L
 
 @attrs.define(slots=False)
 class ModelConfig(BaseModelConfig):
+    # Official DriftWorld evaluates the exponentially averaged student.
+    use_ema: bool = True
     framewise_vae: bool = False
     generated_samples_per_condition: int = 4
     drift_radii: list[float] = attrs.field(factory=lambda: [0.02, 0.05])
@@ -55,11 +58,14 @@ def create_config():
     config.trainer.callbacks = DictConfig(
         {
             **GradClip_CALLBACK,
+            **EMA_CALLBACK,
             **GPUStats_CALLBACK,
             **TrainProfiler_CALLBACK,
             **ParamCount_CALLBACK,
             **WANDB_CALLBACK,
         }
     )
+    # Match the official Bridge DriftWorld EMA decay.
+    config.trainer.callbacks.ema.beta = 0.999
     config.model.net_scheduler.warm_up_steps = [500]
     return config
