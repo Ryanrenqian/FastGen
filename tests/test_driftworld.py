@@ -161,8 +161,12 @@ def test_wan_objective_disables_previous_frame_negative(monkeypatch):
             generated_samples_per_condition=2,
             mask_conditioning_latent_slot=True,
             local_drift_weight=1.0,
+            latent_velocity_drift_weight=0.0,
             trajectory_drift_weight=0.0,
             dinov3_drift_weight=3.0,
+            dinov3_velocity_drift_weight=0.0,
+            normalize_dinov3_motion_weight=False,
+            log_component_gradient_iter=0,
             static_negative_weight=1.0,
             use_dinov3_static_negative=False,
             drift_radii=[0.02, 0.05],
@@ -194,6 +198,8 @@ def test_wan_objective_disables_previous_frame_negative(monkeypatch):
             dino_negative,
             torch.ones(1),
             dino_negative_weight,
+            torch.randn(1, 2, 1, requires_grad=True),
+            torch.randn(1, 1, 1),
         )
         for index in (2, 5, 8)
     ]
