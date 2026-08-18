@@ -28,6 +28,7 @@ def drifting_loss(
     negative: torch.Tensor | None = None,
     negative_weight: float | torch.Tensor = 1.0,
     group_weight: torch.Tensor | None = None,
+    normalize_group_weight: bool = False,
     radii: Sequence[float] = (0.02, 0.05),
     return_force: bool = False,
 ) -> (
@@ -131,9 +132,12 @@ def drifting_loss(
     if group_weight is not None:
         if group_weight.shape != (groups,):
             raise ValueError("group_weight must have shape [G]")
-        per_group_loss = per_group_loss * group_weight.to(
+        group_weight = group_weight.to(
             device=generated.device, dtype=per_group_loss.dtype
         )
+        if normalize_group_weight:
+            group_weight = group_weight / group_weight.mean().clamp_min(1e-8)
+        per_group_loss = per_group_loss * group_weight
     result = (per_group_loss.mean(), metrics)
     if return_force:
         return (*result, total_force.detach())

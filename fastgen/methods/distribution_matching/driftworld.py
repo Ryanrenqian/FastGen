@@ -43,6 +43,13 @@ def _video_tokens(samples: torch.Tensor, *, drop_first_frame: bool) -> torch.Ten
     return samples.permute(0, 3, 4, 5, 1, 2).reshape(batch * frames * height * width, candidates, channels)
 
 
+def _video_velocity_tokens(samples: torch.Tensor) -> torch.Tensor:
+    """Map adjacent latent differences to independent drifting-field groups."""
+    if samples.ndim != 6 or samples.shape[3] <= 1:
+        raise ValueError("video samples must have shape [B, N, C, T>1, H, W]")
+    return _video_tokens(samples[:, :, :, 1:] - samples[:, :, :, :-1], drop_first_frame=False)
+
+
 def _video_block_tokens(
     samples: torch.Tensor,
     *,
@@ -102,6 +109,22 @@ def _dinov3_video_tokens(
         features.reshape(batch, candidates, frames, patches, feature_dim)
         .permute(0, 2, 3, 1, 4)
         .reshape(batch * frames * patches, candidates, feature_dim)
+    )
+
+
+def _dinov3_velocity_tokens(
+    current: torch.Tensor,
+    previous: torch.Tensor,
+    *,
+    batch: int,
+    candidates: int,
+    frames: int,
+) -> torch.Tensor:
+    """Map adjacent DINO patch-feature differences to drift groups."""
+    if current.shape != previous.shape:
+        raise ValueError("current and previous DINOv3 features must have identical shapes")
+    return _dinov3_video_tokens(
+        current - previous, batch=batch, candidates=candidates, frames=frames
     )
 
 
@@ -211,14 +234,18 @@ class DriftWorldModel(FastGenModel):
             raise ValueError("static_negative_weight must be non-negative")
         if (
             self.config.local_drift_weight < 0
+            or self.config.latent_velocity_drift_weight < 0
             or self.config.trajectory_drift_weight < 0
             or self.config.dinov3_drift_weight < 0
+            or self.config.dinov3_velocity_drift_weight < 0
         ):
             raise ValueError("drifting-field weights must be non-negative")
         if (
             self.config.local_drift_weight
+            + self.config.latent_velocity_drift_weight
             + self.config.trajectory_drift_weight
             + self.config.dinov3_drift_weight
+            + self.config.dinov3_velocity_drift_weight
             <= 0
         ):
             raise ValueError("at least one drifting-field weight must be positive")
@@ -228,7 +255,7 @@ class DriftWorldModel(FastGenModel):
             if not hasattr(self.net, "vae") or not hasattr(self.net.vae, "set_framewise"):
                 raise ValueError("framewise_vae requires a video encoder with set_framewise()")
             self.net.vae.set_framewise(True)
-        if self.config.dinov3_drift_weight > 0:
+        if self.config.dinov3_drift_weight > 0 or self.config.dinov3_velocity_drift_weight > 0:
             self.dinov3 = DinoV3FeatureExtractor(
                 repo_dir=self.config.dinov3_repo_dir,
                 weights_path=self.config.dinov3_weights_path,
@@ -267,7 +294,7 @@ class DriftWorldModel(FastGenModel):
     def _dinov3_drifting_fields(
         self, generated: torch.Tensor, positive: torch.Tensor
     ) -> list[
-        tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
     ]:
         """Decode videos and construct Bridge-compatible DINOv3 drift fields."""
         batch, candidates = generated.shape[:2]
@@ -321,6 +348,30 @@ class DriftWorldModel(FastGenModel):
                     previous_tokens,
                     motion_weight,
                     negative_weight,
+                    _dinov3_velocity_tokens(
+                        generated_features[layer_name],
+                        torch.cat(
+                            (
+                                previous_features[layer_name]
+                                .reshape(batch, frames, *previous_features[layer_name].shape[1:])[:, :1]
+                                .unsqueeze(1)
+                                .expand(-1, candidates, -1, -1, -1),
+                                generated_features[layer_name]
+                                .reshape(batch, candidates, frames, *generated_features[layer_name].shape[1:])[:, :, :-1],
+                            ),
+                            dim=2,
+                        ).reshape_as(generated_features[layer_name]),
+                        batch=batch,
+                        candidates=candidates,
+                        frames=frames,
+                    ),
+                    _dinov3_velocity_tokens(
+                        positive_features[layer_name],
+                        previous_features[layer_name],
+                        batch=batch,
+                        candidates=1,
+                        frames=frames,
+                    ),
                 )
             )
         return fields
@@ -354,10 +405,41 @@ class DriftWorldModel(FastGenModel):
             "input_rand": inputs / noise_scale if noise_scale > 0 else inputs,
         }
 
+    @staticmethod
+    def _gradient_diagnostics(
+        generated: torch.Tensor, weighted_components: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        """Measure each objective field at the shared generated-latent interface."""
+        metrics = {}
+        gradients = {}
+        active = list(weighted_components)
+        for index, component_name in enumerate(active):
+            gradient = torch.autograd.grad(
+                weighted_components[component_name],
+                generated,
+                retain_graph=True,
+                allow_unused=True,
+            )[0]
+            if gradient is None:
+                continue
+            gradient = gradient.detach().float()
+            gradients[component_name] = gradient
+            metrics[f"gradient/{component_name}_generated_rms"] = (
+                gradient.square().mean().sqrt()
+            )
+            metrics[f"gradient/{component_name}_generated_norm"] = gradient.norm()
+        for left_index, left_name in enumerate(gradients):
+            left = gradients[left_name].flatten()
+            for right_name in list(gradients)[left_index + 1 :]:
+                right = gradients[right_name].flatten()
+                metrics[f"gradient/cosine_{left_name}_vs_{right_name}"] = (
+                    torch.nn.functional.cosine_similarity(left, right, dim=0, eps=1e-8)
+                )
+        return metrics
+
     def single_train_step(
         self, data: Dict[str, Any], iteration: int
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor | Callable]]:
-        del iteration
         real, condition = self._prepare_data(data)
         positive = self._positives(data, real)
         batch = real.shape[0]
@@ -383,6 +465,16 @@ class DriftWorldModel(FastGenModel):
                     self.config.local_drift_weight,
                     _video_tokens(generated, drop_first_frame=self.config.mask_conditioning_latent_slot),
                     _video_tokens(positive, drop_first_frame=self.config.mask_conditioning_latent_slot),
+                    None,
+                )
+            )
+        if self.config.latent_velocity_drift_weight > 0:
+            fields.append(
+                (
+                    "latent_velocity",
+                    self.config.latent_velocity_drift_weight,
+                    _video_velocity_tokens(generated),
+                    _video_velocity_tokens(positive),
                     None,
                 )
             )
@@ -446,8 +538,9 @@ class DriftWorldModel(FastGenModel):
                     {f"force_compare_local_{key}": value for key, value in comparison.items()}
                 )
 
-        if self.config.dinov3_drift_weight > 0:
+        if self.config.dinov3_drift_weight > 0 or self.config.dinov3_velocity_drift_weight > 0:
             dinov3_losses = []
+            dinov3_velocity_losses = []
             dinov3_negative_weight_means = []
             dinov3_negative_active_fractions = []
             for (
@@ -457,26 +550,30 @@ class DriftWorldModel(FastGenModel):
                 negative_tokens,
                 motion_weight,
                 negative_weight,
+                generated_velocity_tokens,
+                positive_velocity_tokens,
             ) in self._dinov3_drifting_fields(generated, positive):
                 if not self.config.use_dinov3_static_negative:
                     negative_tokens = None
                     negative_weight = torch.zeros_like(negative_weight)
-                layer_result = drifting_loss(
-                    generated_tokens,
-                    positive_tokens,
-                    negative=negative_tokens,
-                    negative_weight=(
-                        self.config.static_negative_weight * negative_weight
-                        if negative_tokens is not None
-                        else 0.0
-                    ),
-                    group_weight=motion_weight,
-                    radii=self.config.drift_radii,
-                    return_force=self.config.compare_temporal_sample_force,
-                )
-                layer_loss, layer_metrics = layer_result[:2]
-                dinov3_losses.append(layer_loss)
-                metrics[f"dinov3_{layer_name}_drifting_loss"] = layer_loss.detach()
+                if self.config.dinov3_drift_weight > 0:
+                    layer_result = drifting_loss(
+                        generated_tokens,
+                        positive_tokens,
+                        negative=negative_tokens,
+                        negative_weight=(
+                            self.config.static_negative_weight * negative_weight
+                            if negative_tokens is not None
+                            else 0.0
+                        ),
+                        group_weight=motion_weight,
+                        normalize_group_weight=self.config.normalize_dinov3_motion_weight,
+                        radii=self.config.drift_radii,
+                        return_force=self.config.compare_temporal_sample_force,
+                    )
+                    layer_loss, layer_metrics = layer_result[:2]
+                    dinov3_losses.append(layer_loss)
+                    metrics[f"dinov3_{layer_name}_drifting_loss"] = layer_loss.detach()
                 metrics[f"dinov3_{layer_name}_negative_weight_mean"] = (
                     self.config.static_negative_weight * negative_weight.mean()
                 ).detach()
@@ -487,13 +584,14 @@ class DriftWorldModel(FastGenModel):
                 dinov3_negative_active_fractions.append(
                     (negative_weight > 1e-3).float().mean()
                 )
-                metrics.update(
-                    {
-                        f"dinov3_{layer_name}_{key}": value
-                        for key, value in layer_metrics.items()
-                    }
-                )
-                if self.config.compare_temporal_sample_force:
+                if self.config.dinov3_drift_weight > 0:
+                    metrics.update(
+                        {
+                            f"dinov3_{layer_name}_{key}": value
+                            for key, value in layer_metrics.items()
+                        }
+                    )
+                if self.config.compare_temporal_sample_force and self.config.dinov3_drift_weight > 0:
                     comparison = _compare_temporal_sample_force(
                         generated_tokens,
                         positive_tokens,
@@ -512,10 +610,39 @@ class DriftWorldModel(FastGenModel):
                             for key, value in comparison.items()
                         }
                     )
-            dinov3_loss = torch.stack(dinov3_losses).mean()
-            weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
-            weighted_components["dinov3"] = self.config.dinov3_drift_weight * dinov3_loss
-            metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
+                if self.config.dinov3_velocity_drift_weight > 0:
+                    velocity_loss, velocity_metrics = drifting_loss(
+                        generated_velocity_tokens,
+                        positive_velocity_tokens,
+                        group_weight=motion_weight,
+                        normalize_group_weight=self.config.normalize_dinov3_motion_weight,
+                        radii=self.config.drift_radii,
+                    )
+                    metrics[f"dinov3_velocity_{layer_name}_drifting_loss"] = (
+                        velocity_loss.detach()
+                    )
+                    metrics.update(
+                        {
+                            f"dinov3_velocity_{layer_name}_{key}": value
+                            for key, value in velocity_metrics.items()
+                        }
+                    )
+                    dinov3_velocity_losses.append(velocity_loss)
+            if dinov3_losses:
+                dinov3_loss = torch.stack(dinov3_losses).mean()
+                weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
+                weighted_components["dinov3"] = self.config.dinov3_drift_weight * dinov3_loss
+                metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
+            if dinov3_velocity_losses:
+                dinov3_velocity_loss = torch.stack(dinov3_velocity_losses).mean()
+                velocity_weighted = (
+                    self.config.dinov3_velocity_drift_weight * dinov3_velocity_loss
+                )
+                weighted_loss = weighted_loss + velocity_weighted
+                weighted_components["dinov3_velocity"] = velocity_weighted
+                metrics["dinov3_velocity_drifting_loss"] = (
+                    dinov3_velocity_loss.detach()
+                )
             metrics["dino_negative_weight_mean"] = (
                 self.config.static_negative_weight
                 * torch.stack(dinov3_negative_weight_means).mean()
@@ -526,6 +653,10 @@ class DriftWorldModel(FastGenModel):
         # Bridge DriftWorld sums feature-field losses. With three averaged DINO
         # blocks at weight 3 this is VAE + DINO_2 + DINO_5 + DINO_8.
         loss = weighted_loss
+        if self.config.log_component_gradient_iter > 0 and (
+            iteration == 1 or iteration % self.config.log_component_gradient_iter == 0
+        ):
+            metrics.update(self._gradient_diagnostics(generated, weighted_components))
         for component_name, component_loss in weighted_components.items():
             metrics[f"{component_name}_weighted_loss"] = component_loss.detach()
 

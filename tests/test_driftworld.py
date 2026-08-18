@@ -73,6 +73,49 @@ def test_drifting_group_weight_matches_reference_weighting():
     assert torch.allclose(weighted, separate, rtol=1e-5, atol=1e-6)
 
 
+def test_normalized_group_weight_preserves_unit_mean_loss_scale():
+    generated = torch.randn(3, 4, 5, requires_grad=True)
+    positive = torch.randn(3, 1, 5)
+    weights = torch.tensor([1.0, 2.0, 4.0])
+
+    weighted, _ = drifting_loss(
+        generated,
+        positive,
+        group_weight=weights,
+        normalize_group_weight=True,
+        radii=[0.05],
+    )
+    separate = torch.stack(
+        [
+            drifting_loss(
+                generated[index : index + 1],
+                positive[index : index + 1],
+                radii=[0.05],
+            )[0]
+            * weights[index]
+            for index in range(3)
+        ]
+    ).sum() / weights.sum()
+
+    assert torch.allclose(weighted, separate, rtol=1e-5, atol=1e-6)
+
+
+def test_component_gradient_diagnostics_reports_norms_and_cosine():
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.methods.distribution_matching.driftworld import DriftWorldModel
+
+    generated = torch.randn(2, 3, requires_grad=True)
+    metrics = DriftWorldModel._gradient_diagnostics(
+        generated,
+        {"first": generated.square().mean(), "second": generated.sum()},
+    )
+
+    assert metrics["gradient/first_generated_norm"] > 0
+    assert metrics["gradient/second_generated_norm"] > 0
+    assert -1 <= metrics["gradient/cosine_first_vs_second"] <= 1
+
+
 def test_drifting_loss_matches_driftworld_reference_equations():
     torch.manual_seed(42)
     generated = torch.randn(5, 4, 7, requires_grad=True)
@@ -209,6 +252,18 @@ def test_video_tokens_drop_ti2v_conditioning_slot():
     assert torch.equal(tokens[0, 0], videos[0, 0, :, 1, 0, 0])
 
 
+def test_video_velocity_tokens_include_condition_to_first_future_transition():
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.methods.distribution_matching.driftworld import _video_velocity_tokens
+
+    videos = torch.arange(2 * 3 * 4 * 5 * 2 * 2).reshape(2, 3, 4, 5, 2, 2)
+    tokens = _video_velocity_tokens(videos)
+
+    assert tokens.shape == (2 * 4 * 2 * 2, 3, 4)
+    assert torch.equal(tokens[0, 0], videos[0, 0, :, 1, 0, 0] - videos[0, 0, :, 0, 0, 0])
+
+
 def test_video_block_tokens_capture_complete_latent_trajectory():
     if importlib.util.find_spec("omegaconf") is None:
         pytest.skip("FastGen framework dependencies are not installed")
@@ -235,6 +290,21 @@ def test_dinov3_video_tokens_keep_candidates_aligned():
     assert tokens.shape == (2 * 4 * 5, 3, 7)
     original = features.reshape(2, 3, 4, 5, 7)
     assert torch.equal(tokens[0, 2], original[0, 2, 0, 0])
+
+
+def test_dinov3_velocity_tokens_keep_candidates_aligned():
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.methods.distribution_matching.driftworld import _dinov3_velocity_tokens
+
+    current = torch.arange(2 * 3 * 4 * 5 * 7).reshape(2 * 3 * 4, 5, 7)
+    previous = current - 2
+    tokens = _dinov3_velocity_tokens(
+        current, previous, batch=2, candidates=3, frames=4
+    )
+
+    assert tokens.shape == (2 * 4 * 5, 3, 7)
+    assert torch.equal(tokens, torch.full_like(tokens, 2))
 
 
 def test_temporal_sample_force_comparison_is_finite_and_frame_aligned():

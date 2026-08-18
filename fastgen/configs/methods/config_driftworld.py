@@ -28,9 +28,13 @@ class ModelConfig(BaseModelConfig):
     use_dinov3_static_negative: bool = False
     compare_temporal_sample_force: bool = False
     local_drift_weight: float = 1.0
+    latent_velocity_drift_weight: float = 0.0
     trajectory_drift_weight: float = 0.0
     trajectory_drift_block: tuple[int, int, int] = (1, 1, 1)
     dinov3_drift_weight: float = 0.0
+    dinov3_velocity_drift_weight: float = 0.0
+    normalize_dinov3_motion_weight: bool = False
+    log_component_gradient_iter: int = 0
     dinov3_repo_dir: str = ""
     dinov3_weights_path: str = ""
     dinov3_model_name: str = "dinov3_vitb16"
