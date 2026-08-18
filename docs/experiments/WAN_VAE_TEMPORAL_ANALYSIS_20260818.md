@@ -19,7 +19,7 @@
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 LOCAL_FILES_ONLY=true \
-HF_HOME=/mnt/home/renqian/imgGen/runtime/MODEL/huggingface \
+HF_HOME=/mnt/home/renqian/imgGen/runtime/MODEL/huggingface/hub \
 /mnt/home/renqian/oneNFE/FastGen-tfd/.conda/envs/fastgen/bin/python \
 scripts/experiments/analyze_wan_vae_temporal.py \
   --output-dir /mnt/home/renqian/imgGen/runtime/fastgen/analysis/wan_vae_temporal_web_20260818 \
@@ -30,4 +30,39 @@ scripts/experiments/analyze_wan_vae_temporal.py \
 
 ## Results
 
-Pending development-machine execution.
+The development-machine run encoded all 24 selected videos. Each video
+produced a latent tensor of shape `[48, 5, 16, 16]`. The static report contains
+24 RGB-frame previews, 24 absolute PCA trajectories, and 24 delta PCA
+trajectories.
+
+| Feature space | PC1+PC2 | Selected K | Silhouette | Mean adjacent speed |
+|---|---:|---:|---:|---|
+| absolute | 0.2793 | 8 | 0.4373 | 0.2841, 0.2875, 0.3078, 0.3038 |
+| first-frame delta | 0.1900 | 3 | 0.6638 | 0.8696, 0.8809, 0.9531, 0.9577 |
+
+Observations:
+
+- Absolute latent clusters are stable within every five-frame clip. This space
+  is dominated by video identity, appearance, and scene layout rather than the
+  short temporal phase.
+- Delta features have a clearer three-state organization. Sample 1 transitions
+  from cluster `1` to `2` at source frame 33. Samples 16 and 19 transition from
+  cluster `1` to `0` at source frame 32.
+- The highest delta path lengths are samples 16 (6.171), 1 (5.461), and 19
+  (5.268). Visual inspection confirms that sample 16 contains a clear hand and
+  object manipulation during the analyzed window.
+- Mean delta movement increases toward frames 33-34, suggesting slightly
+  stronger latent change in the latter half of this sampled window.
+
+## Validation
+
+- Local algorithm and web-generation tests: `7 passed`.
+- Development-machine smoke run: 2/2 videos encoded; report artifacts present.
+- Formal run: 24/24 videos encoded without skips.
+- Copied report: 89 files, 3.9 MB.
+- Image integrity: all 72 per-sample preview/PCA images decoded successfully.
+- HTML static image references: no missing files.
+
+Local report copy:
+
+`outputs/wan_vae_temporal_web_20260818/report.html`
