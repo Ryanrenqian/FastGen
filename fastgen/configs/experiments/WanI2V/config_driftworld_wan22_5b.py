@@ -80,6 +80,9 @@ def create_config():
     # Keep scalar metrics frequent, but avoid encoding/uploading two MP4 files
     # (generated and ground truth) at every scalar logging interval.
     config.trainer.callbacks.wandb.sample_logging_iter = 500
+    config.trainer.callbacks.wandb.upload_media = False
+    config.trainer.callbacks.wandb.save_media_locally = True
+    config.trainer.callbacks.wandb.local_media_fps = 8
     config.log_config.group = "wan22_5b_ti2v_driftworld"
     config.log_config.name = "wan22_ti2v5b_driftworld_256x256_framewise_f5_s1_n64_10k"
     return config

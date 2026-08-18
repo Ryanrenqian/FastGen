@@ -4,6 +4,9 @@
 from __future__ import annotations
 import os
 import netrc
+import html
+import re
+from pathlib import Path
 from dataclasses import dataclass, field
 import time
 from typing import Optional, Dict, Callable, TYPE_CHECKING
@@ -21,7 +24,7 @@ from fastgen.callbacks.callback import Callback
 from fastgen.configs.config_utils import serialize_config
 from fastgen.utils import basic_utils
 
-from fastgen.utils.distributed import rank0_only, synchronize, world_size
+from fastgen.utils.distributed import is_rank0, rank0_only, synchronize, world_size
 from fastgen.utils import logging_utils as logger
 
 if TYPE_CHECKING:
@@ -211,6 +214,9 @@ class WandbCallback(Callback):
         validation_logging_step: int = 1,
         sample_logging_iter: Optional[int] = None,
         vid_format: str = "mp4",
+        upload_media: bool = True,
+        save_media_locally: bool = False,
+        local_media_fps: int = 8,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -219,6 +225,9 @@ class WandbCallback(Callback):
         self.sample_logging_iter = sample_logging_iter
         self.val_sample_map = None
         self.vid_format = vid_format
+        self.upload_media = upload_media
+        self.save_media_locally = save_media_locally
+        self.local_media_fps = local_media_fps
         self.loss_dict_record = _LossDictRecord()
         self.val_loss_dict_record = _LossDictRecord()
 
@@ -241,7 +250,12 @@ class WandbCallback(Callback):
                 wandb.log({f"optimizer/lr_{name}": scheduler.get_last_lr()[0]}, step=iteration)
 
     def get_sample_map(
-        self, model: FastGenModel, data_batch: dict[str, torch.Tensor], output_batch: dict[str, torch.Tensor | Callable]
+        self,
+        model: FastGenModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor | Callable],
+        iteration: int = 0,
+        group: str = "train",
     ) -> dict[str, wandb.Image | wandb.Video]:
         # Collect generated and real data and create copies to avoid modifying the original dicts
         sample_map = {}
@@ -322,15 +336,28 @@ class WandbCallback(Callback):
                 )
                 synchronize()
 
-        if wandb.run:
-            if (
-                "condition_raw" in data_batch
-                and isinstance(data_batch["condition_raw"], (list, tuple))
-                and isinstance(data_batch["condition_raw"][0], str)
-            ):
-                caption = "\n".join(data_batch["condition_raw"][: len(gen_rand)])
-            else:
-                caption = None
+        if (
+            "condition_raw" in data_batch
+            and isinstance(data_batch["condition_raw"], (list, tuple))
+            and isinstance(data_batch["condition_raw"][0], str)
+        ):
+            caption = "\n".join(data_batch["condition_raw"][: len(gen_rand)])
+        else:
+            caption = None
+
+        local_media = {}
+        if isinstance(gen_rand, dict):
+            local_media.update({f"generation_{key}": value for key, value in gen_rand.items()})
+        else:
+            local_media["generation"] = gen_rand
+        if "real" in data_batch:
+            local_media["real"] = data_batch["real"]
+        if "gen_teacher" in output_batch:
+            local_media["teacher"] = output_batch["gen_teacher"]
+        if self.save_media_locally and is_rank0():
+            self._save_local_media(local_media, iteration=iteration, group=group, caption=caption)
+
+        if self.upload_media and wandb.run:
             if isinstance(gen_rand, dict):
                 for k in gen_rand:
                     sample_map[f"student/generation/{k}"] = to_wandb(
@@ -351,6 +378,60 @@ class WandbCallback(Callback):
 
         return sample_map
 
+    @staticmethod
+    def _safe_media_name(name: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "video"
+
+    def _save_local_media(
+        self,
+        media: dict[str, torch.Tensor],
+        *,
+        iteration: int,
+        group: str,
+        caption: str | None,
+    ) -> None:
+        media_root = Path(self.config.log_config.save_path) / "video_gallery"
+        step_dir = media_root / f"{self._safe_media_name(group)}_step_{iteration:08d}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        for name, tensor in media.items():
+            if tensor.ndim != 5:
+                continue
+            basic_utils.save_video(
+                tensor[0],
+                step_dir / f"{self._safe_media_name(name)}.mp4",
+                save_as_gif=False,
+                fps=self.local_media_fps,
+            )
+        (step_dir / "caption.txt").write_text(caption or "", encoding="utf-8")
+        self._write_video_gallery(media_root)
+
+    @staticmethod
+    def _write_video_gallery(media_root: Path) -> None:
+        cards = []
+        for step_dir in sorted(media_root.glob("*_step_*"), reverse=True):
+            if not step_dir.is_dir():
+                continue
+            caption_path = step_dir / "caption.txt"
+            caption = caption_path.read_text(encoding="utf-8") if caption_path.exists() else ""
+            videos = "".join(
+                f'<figure><video controls loop muted preload="metadata" src="{html.escape(path.relative_to(media_root).as_posix())}"></video>'
+                f"<figcaption>{html.escape(path.stem)}</figcaption></figure>"
+                for path in sorted(step_dir.glob("*.mp4"))
+            )
+            cards.append(
+                f"<section><h2>{html.escape(step_dir.name)}</h2><p>{html.escape(caption)}</p><div>{videos}</div></section>"
+            )
+        document = (
+            "<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='refresh' content='60'>"
+            "<title>FastGen video gallery</title><style>body{font-family:sans-serif;background:#111;color:#eee;margin:24px}"
+            "section{border-top:1px solid #444;padding:16px 0}section div{display:flex;gap:16px;flex-wrap:wrap}"
+            "video{width:360px;max-width:90vw}figure{margin:0}p{white-space:pre-wrap;color:#bbb}</style></head><body>"
+            "<h1>FastGen video gallery</h1>" + "".join(cards) + "</body></html>"
+        )
+        temporary = media_root / "index.html.tmp"
+        temporary.write_text(document, encoding="utf-8")
+        os.replace(temporary, media_root / "index.html")
+
     def log_sample_map(
         self,
         model: FastGenModel,
@@ -360,9 +441,11 @@ class WandbCallback(Callback):
         iteration: int = 0,
         group: str = "train",
     ) -> None:
-        sample_map = self.get_sample_map(model, data_batch, output_batch)
+        sample_map = self.get_sample_map(
+            model, data_batch, output_batch, iteration=iteration, group=group
+        )
         sample_map = {f"{group}_media/{k}{suffix}": v for k, v in sample_map.items()}
-        if wandb.run:
+        if wandb.run and sample_map:
             wandb.log(sample_map, step=iteration)
         synchronize()
         gc.collect()

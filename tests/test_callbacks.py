@@ -5,6 +5,7 @@ import copy
 import os
 import gc
 import tempfile
+import pathlib
 
 import pytest
 import numpy as np
@@ -741,6 +742,32 @@ def test_init_wandb_id_follows_trainer_resume(
     assert init_kwargs["resume"] == expected_resume
     with open(wandb_id_path, encoding="utf-8") as f:
         assert f.read().strip() == expected_id
+
+
+def test_wandb_callback_writes_local_video_gallery(tmp_path, monkeypatch):
+    callback = instantiate(WANDB_CALLBACK["wandb"])
+    callback.config = type("Config", (), {
+        "log_config": type("LogConfig", (), {"save_path": str(tmp_path)})()
+    })()
+    callback.local_media_fps = 8
+
+    def fake_save_video(tensor, path, **kwargs):
+        path = pathlib.Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"mp4")
+
+    monkeypatch.setattr("fastgen.callbacks.wandb.basic_utils.save_video", fake_save_video)
+    callback._save_local_media(
+        {"generation": torch.zeros(1, 3, 5, 8, 8), "real": torch.zeros(1, 3, 5, 8, 8)},
+        iteration=10,
+        group="train",
+        caption="pick <object>",
+    )
+
+    gallery = tmp_path / "video_gallery" / "index.html"
+    assert gallery.exists()
+    assert "generation.mp4" in gallery.read_text(encoding="utf-8")
+    assert "pick &lt;object&gt;" in gallery.read_text(encoding="utf-8")
 
 
 def test_callback_list(get_model_data):
