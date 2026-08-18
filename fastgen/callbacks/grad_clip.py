@@ -215,6 +215,17 @@ class GradClipCallback(Callback):
                     total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), self.grad_norm, foreach=True)
 
             log_dict[f"optimizer/grad_norm (model_key {self.model_key})"] = total_norm.item()
+            if (
+                hasattr(self, "config")
+                and iteration % self.config.trainer.logging_iter == 0
+                and is_rank0()
+            ):
+                clip_ratio = min(1.0, self.grad_norm / max(total_norm.item(), 1e-12))
+                logger.info(
+                    f"Gradient norm before clipping ({self.model_key}): "
+                    f"{total_norm.item():.6f}; threshold={self.grad_norm:.6f}; "
+                    f"clip_ratio={clip_ratio:.6f}"
+                )
 
         if hasattr(self, "config"):
             # only wandb log when config exists
