@@ -318,3 +318,33 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     assert config.dataloader_train.index_path.endswith(
         "demo5_dataset/manifests/demo5_clean_10k_f49_seed10.csv"
     )
+
+
+def test_wan22_driftworld_dinov3_only_is_single_variable_ablation():
+    required = ("omegaconf", "webdataset", "diffusers", "torchvision", "av")
+    if any(importlib.util.find_spec(name) is None for name in required):
+        pytest.skip("full FastGen training dependencies are not installed")
+    from fastgen.configs.experiments.WanI2V.config_driftworld_wan22_5b import (
+        create_config as create_baseline_config,
+    )
+    from fastgen.configs.experiments.WanI2V.config_driftworld_wan22_5b_dinov3_only import (
+        create_config,
+    )
+
+    baseline = create_baseline_config()
+    config = create_config()
+
+    assert baseline.model.local_drift_weight == 1.0
+    assert config.model.local_drift_weight == 0.0
+    assert config.model.trajectory_drift_weight == baseline.model.trajectory_drift_weight == 0.0
+    assert config.model.dinov3_drift_weight == baseline.model.dinov3_drift_weight == 3.0
+    assert config.model.static_negative_weight == baseline.model.static_negative_weight == 0.0
+    assert config.model.use_dinov3_static_negative is baseline.model.use_dinov3_static_negative is False
+    assert config.model.input_shape == baseline.model.input_shape == [48, 5, 16, 16]
+    assert config.model.framewise_vae is baseline.model.framewise_vae is True
+    assert config.model.generated_samples_per_condition == 64
+    assert config.dataloader_train.img_size == baseline.dataloader_train.img_size == (256, 256)
+    assert config.dataloader_train.sequence_length == 5
+    assert config.dataloader_train.frame_start == 30
+    assert config.dataloader_train.frame_stride == 1
+    assert "dinov3_only" in config.log_config.name
