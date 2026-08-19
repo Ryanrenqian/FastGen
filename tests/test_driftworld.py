@@ -141,6 +141,7 @@ def test_wan_objective_disables_previous_frame_negative(monkeypatch):
     fake._positives = lambda data, value: value.unsqueeze(1)
     fake.gen_data_from_net = lambda noise, timestep, condition: noise
     fake._get_outputs = lambda *args: {}
+    fake._dinov3_weight = lambda iteration: fake.config.dinov3_drift_weight
     dino_negative = torch.randn(1, 1, 1)
     dino_negative_weight = torch.tensor([[0.75]])
     fake._dinov3_drifting_fields = lambda generated, positive: [
