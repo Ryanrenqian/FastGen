@@ -100,6 +100,20 @@ def test_bridge_field_objective_is_direct_sum():
     assert objective == vae_loss + dino_block_losses.sum()
 
 
+def test_wan22_driftworld_config_adds_large_radius_kernel():
+    required = ("omegaconf", "webdataset", "diffusers", "torchvision", "av")
+    if any(importlib.util.find_spec(name) is None for name in required):
+        pytest.skip("full FastGen training dependencies are not installed")
+    from fastgen.configs.experiments.WanI2V.config_driftworld_wan22_5b import (
+        create_config,
+    )
+
+    config = create_config()
+
+    assert config.model.drift_radii == [0.02, 0.05, 0.2]
+    assert "r002_005_020" in config.log_config.name
+
+
 def test_wan_objective_disables_previous_frame_negative(monkeypatch):
     if importlib.util.find_spec("omegaconf") is None:
         pytest.skip("FastGen framework dependencies are not installed")

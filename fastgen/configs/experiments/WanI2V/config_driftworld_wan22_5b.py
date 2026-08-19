@@ -21,7 +21,9 @@ def create_config():
     config.model.student_sample_steps = 1
     config.model.framewise_vae = True
     config.model.generated_samples_per_condition = 64
-    config.model.drift_radii = [0.02, 0.05]
+    # Retain Bridge's two local kernels and add the official implementation's
+    # 0.2 large-scale kernel to broaden positive-sample support.
+    config.model.drift_radii = [0.02, 0.05, 0.2]
     config.model.mask_conditioning_latent_slot = True
     # Conditional-only experiment: train on the caption and first-frame
     # condition. Do not add an empty-text/CFG branch.
@@ -87,6 +89,7 @@ def create_config():
     config.trainer.callbacks.wandb.local_media_fps = 8
     config.log_config.group = "wan22_5b_ti2v_driftworld"
     config.log_config.name = (
-        "wan22_ti2v5b_driftworld_ema0999_cond_only_256x256_f5_s1_n64_10k"
+        "wan22_ti2v5b_driftworld_ema0999_cond_only_"
+        "256x256_f5_s1_n64_10k_r002_005_020"
     )
     return config

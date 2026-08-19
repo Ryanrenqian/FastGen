@@ -22,6 +22,11 @@ servers:
         purpose: Conditional-only Wan2.2 DriftWorld with EMA stabilization
         status: active
 
+      - branch: feature/wan22-driftworld-ema-large-radius
+        path: /mnt/home/renqian/oneNFE/FastGen-driftworld-ema-large-radius
+        purpose: EMA conditional-only DriftWorld with an added 0.2 drift kernel
+        status: active
+
       - branch: feature/wan22-driftworld-temporal-weight-search
         path: /mnt/home/renqian/oneNFE/FastGen-driftworld-temporal
         purpose: Calibrate latent and DINOv3 temporal-velocity drifting fields
