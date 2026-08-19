@@ -287,6 +287,26 @@ def test_repeat_condition_keeps_ti2v_candidates_aligned():
     assert repeated["first_frame_cond"].flatten().tolist() == [10, 10, 10, 20, 20, 20]
 
 
+def test_dinov3_curriculum_warms_up_then_ramps_linearly():
+    if importlib.util.find_spec("omegaconf") is None:
+        pytest.skip("FastGen framework dependencies are not installed")
+    from fastgen.methods.distribution_matching.driftworld import DriftWorldModel
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            dinov3_drift_weight=3.0,
+            dinov3_warmup_steps=1_000,
+            dinov3_ramp_steps=1_000,
+        )
+    )
+    weight = DriftWorldModel._dinov3_weight
+    assert weight(model, 999) == 0.0
+    assert weight(model, 1_000) == pytest.approx(0.003)
+    assert weight(model, 1_499) == pytest.approx(1.5)
+    assert weight(model, 1_999) == 3.0
+    assert weight(model, 3_000) == 3.0
+
+
 def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     required = ("omegaconf", "webdataset", "diffusers", "torchvision", "av")
     if any(importlib.util.find_spec(name) is None for name in required):
@@ -321,3 +341,34 @@ def test_wan22_driftworld_config_uses_ti2v_pretrained_model():
     assert config.dataloader_train.index_path.endswith(
         "demo5_dataset/manifests/demo5_clean_10k_f49_seed10.csv"
     )
+
+
+def test_native81_two_stage_configs_share_data_and_latent_contract():
+    required = ("omegaconf", "webdataset", "diffusers", "torchvision", "av")
+    if any(importlib.util.find_spec(name) is None for name in required):
+        pytest.skip("full FastGen training dependencies are not installed")
+    from fastgen.configs.experiments.WanI2V.config_dmd2_wan22_5b_demo5_native81 import (
+        create_config as create_dmd2_config,
+    )
+    from fastgen.configs.experiments.WanI2V.config_driftworld_wan22_5b_from_dmd2_native81 import (
+        create_config as create_driftworld_config,
+    )
+
+    dmd2 = create_dmd2_config()
+    driftworld = create_driftworld_config()
+    for config in (dmd2, driftworld):
+        assert config.model.input_shape == [48, 21, 44, 80]
+        assert config.dataloader_train.sequence_length == 81
+        assert config.dataloader_train.img_size == (1280, 704)
+        assert config.dataloader_train.dataset_size == 6_423
+        assert config.dataloader_train.positive_frame_strides == []
+
+    assert dmd2.model.student_sample_steps == 2
+    assert dmd2.model.sample_t_cfg.t_list == [0.999, 0.833, 0.0]
+    assert driftworld.model.student_sample_steps == 1
+    assert driftworld.model.framewise_vae is False
+    assert driftworld.model.use_ema is False
+    assert driftworld.model.generated_samples_per_condition == 2
+    assert driftworld.model.dinov3_warmup_steps == 1_000
+    assert driftworld.model.dinov3_ramp_steps == 1_000
+    assert driftworld.trainer.checkpointer.pretrained_ckpt_key_map == {"net": "net"}

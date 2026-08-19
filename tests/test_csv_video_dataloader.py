@@ -87,6 +87,34 @@ def test_csv_video_loader_builds_stride_positives(tmp_path, monkeypatch):
     )
 
 
+def test_csv_video_loader_can_skip_duplicate_positive_tensor(tmp_path, monkeypatch):
+    index_path = tmp_path / "index.csv"
+    with index_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "video_path", "n_frames", "fps", "height", "width",
+                "caption_l3", "caption_l2", "caption_l1", "kw_class",
+            ]
+        )
+        writer.writerow(["clip.mp4", 5, 16, 8, 8, "motion", "", "", "test"])
+
+    frames = torch.zeros(5, 8, 8, 3, dtype=torch.uint8)
+    monkeypatch.setattr(CSVVideoDataset, "_load_video", lambda self, path: frames)
+    dataset = CSVVideoDataset(
+        index_path=str(index_path),
+        sequence_length=5,
+        img_size=(8, 8),
+        train=False,
+        positive_frame_strides=[],
+    )
+
+    sample = next(iter(dataset))
+
+    assert sample["real"].shape == (3, 5, 8, 8)
+    assert "positive_raw" not in sample
+
+
 def test_csv_video_loader_samples_fixed_endpoints_with_frame_stride(tmp_path, monkeypatch):
     index_path = tmp_path / "index.csv"
     with index_path.open("w", newline="") as handle:

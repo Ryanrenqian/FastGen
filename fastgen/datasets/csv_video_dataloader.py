@@ -60,13 +60,11 @@ class CSVVideoDataset(IterableDataset):
         if self.frame_start is not None and self.frame_start < 0:
             raise ValueError("frame_start must be non-negative when provided")
         self.positive_frame_strides = tuple(int(stride) for stride in positive_frame_strides)
-        if not self.positive_frame_strides or any(
-            stride <= 0 for stride in self.positive_frame_strides
-        ):
+        if any(stride <= 0 for stride in self.positive_frame_strides):
             raise ValueError("positive_frame_strides must contain positive integers")
         if len(set(self.positive_frame_strides)) != len(self.positive_frame_strides):
             raise ValueError("positive_frame_strides must not contain duplicates")
-        if self.positive_frame_strides[0] != 1:
+        if self.positive_frame_strides and self.positive_frame_strides[0] != 1:
             raise ValueError("positive_frame_strides must start with 1 for I2V conditioning")
         self.positive_random_walk_count = int(positive_random_walk_count)
         self.positive_stride1_repeat_count = int(positive_stride1_repeat_count)
@@ -83,7 +81,7 @@ class CSVVideoDataset(IterableDataset):
         ):
             raise ValueError("positive random steps must be positive and ordered")
         required_step_max = max(
-            max(self.positive_frame_strides),
+            max(self.positive_frame_strides, default=1),
             self.positive_random_step_max if self.positive_random_walk_count else 1,
             self.frame_stride,
         )
@@ -165,16 +163,17 @@ class CSVVideoDataset(IterableDataset):
             for _ in range(self.positive_random_walk_count):
                 indices = self._random_walk_indices(rng)
                 positive_clips.append(full_video[:, indices])
-        positives = torch.stack(positive_clips, dim=0)
         real = full_video[:, :: self.frame_stride][:, : self.sequence_length]
-        return {
+        output = {
             "real": real,
-            "positive_raw": positives,
             "condition": row["caption"],
             "neg_condition": self.negative_prompt,
             "fname": row["path"],
             "shard": self.index_path,
         }
+        if positive_clips:
+            output["positive_raw"] = torch.stack(positive_clips, dim=0)
+        return output
 
     def _load_video(self, video_path: str) -> torch.Tensor | None:
         if not os.path.isfile(video_path):

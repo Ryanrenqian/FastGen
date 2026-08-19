@@ -215,6 +215,15 @@ class DriftWorldModel(FastGenModel):
             or self.config.dinov3_drift_weight < 0
         ):
             raise ValueError("drifting-field weights must be non-negative")
+        if self.config.dinov3_warmup_steps < 0 or self.config.dinov3_ramp_steps < 0:
+            raise ValueError("DINOv3 curriculum steps must be non-negative")
+        if (
+            self.config.dinov3_warmup_steps > 0
+            and self.config.local_drift_weight + self.config.trajectory_drift_weight <= 0
+        ):
+            raise ValueError(
+                "DINOv3 warmup requires a positive latent or trajectory drift weight"
+            )
         if (
             self.config.local_drift_weight
             + self.config.trajectory_drift_weight
@@ -341,6 +350,15 @@ class DriftWorldModel(FastGenModel):
             raise ValueError("positive must have shape [B, P, C, T, H, W]")
         return positive
 
+    def _dinov3_weight(self, iteration: int) -> float:
+        target = self.config.dinov3_drift_weight
+        if target == 0 or iteration < self.config.dinov3_warmup_steps:
+            return 0.0
+        if self.config.dinov3_ramp_steps == 0:
+            return target
+        ramp_iteration = iteration - self.config.dinov3_warmup_steps + 1
+        return target * min(1.0, ramp_iteration / self.config.dinov3_ramp_steps)
+
     def _get_outputs(
         self, gen_data: torch.Tensor, input_student: torch.Tensor, condition: Any = None
     ) -> Dict[str, torch.Tensor | Callable]:
@@ -357,7 +375,6 @@ class DriftWorldModel(FastGenModel):
     def single_train_step(
         self, data: Dict[str, Any], iteration: int
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor | Callable]]:
-        del iteration
         real, condition = self._prepare_data(data)
         positive = self._positives(data, real)
         batch = real.shape[0]
@@ -446,7 +463,8 @@ class DriftWorldModel(FastGenModel):
                     {f"force_compare_local_{key}": value for key, value in comparison.items()}
                 )
 
-        if self.config.dinov3_drift_weight > 0:
+        dinov3_weight = self._dinov3_weight(iteration)
+        if dinov3_weight > 0:
             dinov3_losses = []
             dinov3_negative_weight_means = []
             dinov3_negative_active_fractions = []
@@ -513,8 +531,8 @@ class DriftWorldModel(FastGenModel):
                         }
                     )
             dinov3_loss = torch.stack(dinov3_losses).mean()
-            weighted_loss = weighted_loss + self.config.dinov3_drift_weight * dinov3_loss
-            weighted_components["dinov3"] = self.config.dinov3_drift_weight * dinov3_loss
+            weighted_loss = weighted_loss + dinov3_weight * dinov3_loss
+            weighted_components["dinov3"] = dinov3_weight * dinov3_loss
             metrics["dinov3_drifting_loss"] = dinov3_loss.detach()
             metrics["dino_negative_weight_mean"] = (
                 self.config.static_negative_weight
@@ -547,7 +565,7 @@ class DriftWorldModel(FastGenModel):
             dino_weighted = weighted_components["dinov3"]
             metrics["dino_drifting_loss"] = dino_raw
             metrics["dino_drift_weight"] = dino_raw.new_tensor(
-                self.config.dinov3_drift_weight
+                dinov3_weight
             )
             metrics["dino_weighted_loss"] = dino_weighted.detach()
         if "local" in weighted_components and "dinov3" in weighted_components:
@@ -559,5 +577,6 @@ class DriftWorldModel(FastGenModel):
             metrics["dinov3_to_latent_loss_ratio"] = ratio.detach()
             metrics["latent_loss_fraction"] = (vae_weighted / pair_total).detach()
             metrics["dinov3_loss_fraction"] = (dino_weighted / pair_total).detach()
+        metrics["dinov3_effective_weight"] = loss.new_tensor(dinov3_weight)
         loss_map = {"total_loss": loss, "drifting_loss": loss, **metrics}
         return loss_map, self._get_outputs(generated_flat, input_student, condition)

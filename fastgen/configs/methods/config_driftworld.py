@@ -45,6 +45,10 @@ class ModelConfig(BaseModelConfig):
     dinov3_motion_lambda: float = 12.0
     dinov3_motion_quantile: float = 0.98
     dinov3_motion_threshold: float = 0.35
+    # Optional latent-first curriculum for aggressive multi-step to one-step
+    # compression. The default preserves constant DINOv3 weighting.
+    dinov3_warmup_steps: int = 0
+    dinov3_ramp_steps: int = 0
 
 
 @attrs.define(slots=False)
